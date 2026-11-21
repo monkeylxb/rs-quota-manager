@@ -15,6 +15,11 @@ const accounts = [account('acct_001'), account('acct_002', false), account('acct
 accounts[7].name = 'free-prefix-but-paid-plus@example.com'
 const quota = (id, used = 25, key = 'codex:604800s', seconds = 604800) => ({ schema_version: 1, account_id: id, observed_at_ms: Date.now(), windows: [{ key, window_seconds: seconds, used_percent: used, reset_at_ms: stamp + 86400000 }] })
 const quotas = new Map(accounts.map(a => [a.account_id, quota(a.account_id)]))
+const balances = new Map([['acct_001', '0'], ['acct_002', '12.50']])
+const useQuotaCredits = new Map([['acct_002', true]]), useResetCards = new Map()
+const policyWrites = [], subscriptionReads = [], quotaFactReads = []
+let resetCardSettings = { resetCreditOnLowWeeklyQuota: false, resetCreditLeadMinutes: 15, resetCreditMaxWeeklyRemainingPercent: 25 }
+const subscription = { startsAt: '2026-10-20T00:00:00Z', expiresAt: '2026-11-20T00:00:00Z', observedAt: new Date(stamp).toISOString() }
 const cards = new Map(accounts.map(a => [a.account_id, { availableCount: 2, credits: [
   { id: `${a.account_id}_late`, status: 'available', title: 'Full reset (Weekly + 5 hr)', resetType: 'full', expiresAt: new Date(stamp + 86400000 * 7).toISOString(), expiresAtDisplay: null },
   { id: `${a.account_id}_early`, status: 'available', title: 'Full reset (Weekly + 5 hr)', resetType: 'full', expiresAt: new Date(stamp + 86400000 * 2).toISOString(), expiresAtDisplay: null },
@@ -22,7 +27,7 @@ const cards = new Map(accounts.map(a => [a.account_id, { availableCount: 2, cred
 const records = new Map(), posts = [], refreshCalls = [], reads = [], handles = new Map()
 const runtimeAccount = a => ({ account_id: a.account_id, provider_id: a.provider_id, name: a.name, email: a.email, enabled: a.enabled,
   credential_revision: 1, upstream_user_id: null, upstream_account_id: null, plan_type: a.plan, authentication_kind: 'oauth', credential_state: 'ready', has_refresh_token: true, access_token_expires_at_ms: null, next_refresh_at_ms: null })
-let consumeMode = 'reset', child, buffered, pending, ready, sequence = 99, errors = '', activeMode = 'normal', incarnation, handleSequence = 0, runtimeReads = 0, cardQueries = 0, failSelectionWrite = false
+let consumeMode = 'reset', child, buffered, pending, ready, sequence = 99, errors = '', activeMode = 'normal', incarnation, handleSequence = 0, cardQueries = 0
 
 function send(meta, data, payload = Buffer.alloc(0)) {
   if (!(payload instanceof Buffer)) payload = Buffer.from(JSON.stringify(payload))
@@ -45,31 +50,82 @@ async function callback(meta, params, payload) {
     const batch = accounts.slice(start, start + Math.min(data.limit, 2))
     return result(meta.id, {}, { ...(meta.method === 'host.data.accounts.list' ? {schema_version:1} : {}), accounts: meta.method === 'host.auth.list' ? batch.map(runtimeAccount) : batch, next_cursor: start + batch.length < accounts.length ? batch.at(-1).account_id : null })
   }
-  if (meta.method === 'host.data.quota.get' || meta.method === 'host.quota_observations.refresh') {
+  if (['host.data.quota.get', 'host.data.quota.details', 'host.quota_observations.refresh'].includes(meta.method)) {
+    if (meta.method === 'host.data.quota.get') {
+      quotaFactReads.push(data.account_id)
+      if (data.account_id === 'acct_003') return error(meta.id)
+    }
     const q = structuredClone(quotas.get(data.account_id))
-    if (meta.method.includes('refresh')) { refreshCalls.push(data.account_id); q.observed_at_ms = Date.now(); if (activeMode === 'recovered') q.windows[0].used_percent = 10 }
+    if (meta.method.includes('refresh')) { refreshCalls.push(data.account_id); q.observed_at_ms = Date.now() }
+    if (meta.method.endsWith('details')) {
+      q.limit_reached = false
+      q.windows = q.windows.map(window => ({ ...window, group: 'codex', label: '周限', limit_reached: false }))
+      q.credits = { has_credits: true, unlimited: false, balance: balances.get(data.account_id) ?? null }
+    }
     return result(meta.id, {}, q)
   }
   if (meta.method === 'host.auth.get_runtime') {
-    runtimeReads++
     const a = accounts.find(a => a.account_id === data.account_id)
     return result(meta.id, {}, runtimeAccount(a))
   }
   if (meta.method === 'host.state.get') return result(meta.id, { record: records.get(data.key) ?? null })
   if (meta.method === 'host.state.put') {
-    if (data.key === 'automation' && failSelectionWrite) { failSelectionWrite = false; return error(meta.id) }
     const existing = records.get(data.key)
     if ((existing?.version ?? null) !== data.expected_version) return error(meta.id, 'conflict')
     const version = (existing?.version ?? 0) + 1
     records.set(data.key, { value: structuredClone(data.value), version, schema_version: 1 })
     return result(meta.id, { version })
   }
+  if (meta.method === 'host.services.call') {
+    const { operation, input } = data
+    let id = input
+    if (operation === 'accounts.set_reset_credit_automation') {
+      const [accountId, enabled] = input
+      id = accountId
+      assert.equal(typeof enabled, 'boolean')
+      useResetCards.set(id, enabled)
+      policyWrites.push({ id, key: 'resetCards', enabled })
+    } else assert.equal(operation, 'accounts.reset_credit_automation_status')
+    const enabled = useResetCards.get(id) ?? false
+    return result(meta.id, { Ok: { enabled, lead_minutes: 15, weekly_trigger_remaining_percent: null, next_discovery_at: null, next_consume_at: enabled ? '2026-12-01T18:00:00Z' : null, last_result: null } })
+  }
   if (meta.method === 'host.http.dispatch') {
     const url = new URL(params.uri, 'http://mock.invalid'), id = url.searchParams.get('accountId') || data.accountId
-    assert.equal(url.pathname, '/api/admin/accounts/reset-credits')
     let envelope
-    if (params.method === 'GET') { cardQueries++; envelope = { code: 200, message: 'ok', data: cards.get(id) }; if (activeMode === 'downgraded') accounts.find(a=>a.account_id===id).plan = 'free'; if (activeMode === 'automation_off') { records.get('settings').value.automatic = false; records.get('settings').version++ } }
-    else {
+    if (url.pathname === '/api/admin/settings') {
+      assert.equal(params.method, 'GET')
+      if (activeMode === 'settings_error') return error(meta.id)
+      envelope = { code: 200, data: { ...resetCardSettings, unrelated: 'settings-private-marker' } }
+    } else if (url.pathname === '/api/admin/accounts') {
+      assert.equal(params.method, 'GET')
+      assert.equal(url.searchParams.get('pageSize'), '20')
+      const offset = (Number(url.searchParams.get('page')) - 1) * 2
+      const items = accounts.slice(offset, offset + 2).map(a => ({
+        id: a.account_id, name: a.name, email: a.email, enabled: a.enabled, provider: a.provider_id,
+        authenticationKind: 'oauth', planType: a.plan, planTypeDisplay: a.plan === 'team' ? 'Team' : a.plan,
+        autoUseQuotaCredits: useQuotaCredits.get(a.account_id) ?? false,
+        capabilities: { quotaCredits: a.account_id !== 'acct_008', resetCredits: a.account_id !== 'acct_008', consumeResetCredit: a.account_id !== 'acct_008' },
+      }))
+      envelope = { code: 200, data: { items, page: { totalPages: Math.ceil(accounts.length / 2) } } }
+    } else if (url.pathname === '/api/admin/accounts/personal-info') {
+      assert.equal(params.method, 'GET')
+      subscriptionReads.push(id)
+      if (activeMode === 'subscription_error') return error(meta.id)
+      envelope = { code: 200, data: { subscription, profile: { privateMarker: 'ignored-profile-field' } } }
+    } else if (url.pathname === '/api/admin/accounts/batch-update') {
+      assert.equal(params.method, 'POST')
+      const [accountId] = data.accountIds
+      assert.deepEqual(data, { accountIds: [accountId], autoUseQuotaCredits: data.autoUseQuotaCredits })
+      assert.equal(typeof data.autoUseQuotaCredits, 'boolean')
+      useQuotaCredits.set(accountId, data.autoUseQuotaCredits)
+      policyWrites.push({ id: accountId, key: 'quotaCredits', enabled: data.autoUseQuotaCredits })
+      envelope = { code: 200, data: { accountIds: [accountId] } }
+    } else if (url.pathname === '/api/admin/accounts/reset-credits' && params.method === 'GET') {
+      cardQueries++
+      envelope = { code: 200, message: 'ok', data: cards.get(id) }
+      if (activeMode === 'downgraded') accounts.find(a => a.account_id === id).plan = 'free'
+    } else {
+      assert.equal(url.pathname, '/api/admin/accounts/reset-credits')
       assert.equal(params.method, 'POST')
       const state = records.get(`account/${id}`).value
       assert.equal(state.pending.requestId, data.redeemRequestId, 'Pending UUID must be durable before POST')
@@ -166,61 +222,137 @@ try {
   const registrationReply = await call('management.register', {}, Buffer.alloc(0), 'registration')
   const registration = JSON.parse(registrationReply.payload.toString()); assert.equal(registration.pages[0].entry, 'web/index.html'); assert.equal(registration.routes.length, 8)
   check('RPC v7 handshake and management v2 registration')
-  const page = await request('api/accounts'); assert.equal(page.status, 200); assert.equal(page.value.accounts.length, 2); assert.equal(page.value.nextCursor, 'acct_002'); assert.equal(page.value.accounts[0].account.name, accounts[0].name)
-  assert.equal(page.value.accounts[0].account.plan_type, 'team'); assert.equal(page.value.accounts[1].account.enabled, false)
-  assert.ok(page.value.accounts.every(row=>!row.state.automatic))
-  check('Pagination includes complete account ID and name')
-  const freePage = await request('api/accounts', undefined, 'cursor=acct_006'); assert.equal(freePage.value.accounts.length, 1); assert.equal(freePage.value.accounts[0].account.account_id, 'acct_008')
-  const mixedPage = await request('api/accounts', undefined, 'cursor=acct_005'); assert.equal(mixedPage.value.accounts.length, 0); assert.equal(mixedPage.value.nextCursor, 'acct_007')
-  const paidAfterFree = await request('api/accounts', undefined, 'cursor='+mixedPage.value.nextCursor); assert.equal(paidAfterFree.value.accounts[0].account.plan_type, 'plus')
-  check('RS plan type excludes Free despite team-like names and preserves empty-page pagination')
-  const beforeFreeQueries = cardQueries, beforeFreePosts = posts.length
-  for (const path of ['api/consume','api/refresh','api/policy']) { const blocked=await request(path,{accountId:'acct_006',creditId:'acct_006_early',automatic:true}); assert.equal(blocked.status,400) }
-  assert.equal(posts.length,beforeFreePosts); assert.equal(cardQueries,beforeFreeQueries)
-  check('Free cannot refresh cards, change automation policy or start redemption')
-  await scan(); assert.equal(posts.length, 0); check('Automatic consumption is off by default')
-  const saved = await request('api/settings', { value: { automatic: true, checkIntervalSeconds: 30, cardsRefreshSeconds: 3600, batchSize: 20 }, expectedVersion: null }); assert.equal(saved.status, 200)
-  const conflict = await request('api/settings', { value: saved.value.value, expectedVersion: null }); assert.equal(conflict.status, 409); check('Settings reject stale writers')
-  const automatic = enabled => request('api/automatic',{enabled,expectedVersion:records.get('settings')?.version??null})
-  let policyResult=await request('api/policy',{accountId:'acct_003',automatic:false,expectedVersion:records.get('settings').version});assert.equal(policyResult.status,200);assert.equal(policyResult.value.state.automatic,false)
-  let policyPage=await request('api/accounts',undefined,'cursor=acct_002');assert.equal(policyPage.value.accounts[0].state.automatic,false);assert.equal(policyPage.value.accounts[1].state.automatic,true)
-  check('Per-account changes preserve other automatic selections')
-  let changedSettings=await request('api/settings',{value:{...saved.value.value,checkIntervalSeconds:60},expectedVersion:records.get('settings').version});assert.equal(changedSettings.status,200)
-  policyPage=await request('api/accounts',undefined,'cursor=acct_002');assert.equal(policyPage.value.accounts[0].state.automatic,false)
-  check('Inline parameter saves preserve account exclusions')
-  let off=await automatic(false);assert.equal(off.status,200);policyPage=await request('api/accounts');assert.ok(policyPage.value.accounts.every(row=>!row.state.automatic))
-  await stop();await start();policyPage=await request('api/accounts');assert.ok(policyPage.value.accounts.every(row=>!row.state.automatic))
-  check('Master off clears effective account switches and survives restart')
-  policyResult=await request('api/policy',{accountId:'acct_003',automatic:true,expectedVersion:records.get('settings').version});assert.equal(policyResult.value.value.automatic,true)
-  policyPage=await request('api/accounts');assert.ok(policyPage.value.accounts.every(row=>!row.state.automatic));policyPage=await request('api/accounts',undefined,'cursor=acct_002');assert.equal(policyPage.value.accounts[0].state.automatic,true);assert.equal(policyPage.value.accounts[1].state.automatic,false)
-  check('Enabling one account while master is off enables only that account')
-  let on=await automatic(true);assert.equal(on.status,200);policyPage=await request('api/accounts');assert.equal(policyPage.value.accounts[0].state.automatic,true);assert.equal(policyPage.value.accounts[1].state.automatic,false)
-  check('Master on selects applicable accounts while paused accounts remain off')
-  failSelectionWrite=true;off=await automatic(false);assert.equal(off.status,400);assert.equal(records.get('settings').value.automatic,false);policyPage=await request('api/accounts');assert.ok(policyPage.value.accounts.every(row=>!row.state.automatic))
-  check('Failure clearing selections cannot reopen an already disabled master gate')
-  on=await automatic(true);assert.equal(on.status,200)
-  const scanState=records.get('scan');scanState.value.cursor='acct_005';scanState.value.nextAtMs=0;const beforeFreeScan=cardQueries;quotas.set('acct_006',quota('acct_006',100));quotas.set('acct_007',quota('acct_007',100));await scan();assert.equal(cardQueries,beforeFreeScan);assert.equal(posts.length,0)
-  check('Background scan skips Free even when a weekly limit exists')
-  records.get('scan').value.cursor = null; quotas.set('acct_001', quota('acct_001', 100)); quotas.set('acct_002', quota('acct_002', 100))
-  await scan(); assert.equal(posts.length, 1); assert.equal(posts[0].creditId, 'acct_001_early'); assert.ok(refreshCalls.includes('acct_001')); assert.equal(accounts[1].enabled, false)
-  check('Fresh weekly exhaustion redeems earliest expiry and preserves pause state')
-  records.get('account/acct_001').value.awaitingRecovery = true; records.get('account/acct_001').value.lastAttemptAtMs = Date.now() - 120000
-  records.get('scan').value.cursor = null; quotas.set('acct_001', quota('acct_001', 100)); await scan(); assert.equal(posts.length, 1)
-  check('A reset awaiting recovery cannot consume another card')
-  records.get('account/acct_001').value.awaitingRecovery = false
-  records.get('scan').value.cursor = null; quotas.set('acct_001', quota('acct_001', 100, 'review:604800s')); await scan(); assert.equal(posts.length, 1)
-  check('Model-specific weekly limits and disabled accounts do not redeem')
-  quotas.set('acct_001', quota('acct_001', 100, 'codex:18000s', 18000)); records.get('scan').value.cursor = null; await scan(); assert.equal(posts.length, 1)
-  check('Five-hour exhaustion does not trigger weekly redemption')
-  quotas.set('acct_003', quota('acct_003', 100)); records.get('scan').value.cursor = 'acct_002'; activeMode = 'recovered'; await scan(); assert.equal(posts.length, 1); activeMode = 'normal'
-  check('Cached exhaustion is skipped when upstream has recovered')
+  const page = await request('api/accounts')
+  assert.equal(page.status, 200)
+  assert.equal(page.value.nextPage, 2)
+  assert.deepEqual(page.value.accounts.map(r => r.account.account_id), ['acct_001', 'acct_002'])
+  const [first, second] = page.value.accounts
+  assert.equal(first.account.name, accounts[0].name)
+  assert.equal(first.account.plan_type_display, 'Team')
+  assert.equal(first.quota.credits.balance, '0')
+  assert.equal(second.quota.credits.balance, '12.50')
+  assert.equal(second.account.enabled, false)
+  assert.equal(second.autoUseQuotaCredits, true)
+  assert.equal(second.resetCardAutomation.enabled, false)
+  assert.equal(first.state.subscription, null)
+  assert.deepEqual(subscriptionReads, [])
+  assert.equal(cardQueries, 0)
+  check('List reads cached facts and native flags without querying upstream')
+
+  const mixed = await request('api/accounts', undefined, 'page=3')
+  assert.deepEqual(mixed.value.accounts.map(r => r.account.account_id), ['acct_005'])
+  assert.equal(mixed.value.nextPage, 4)
+  const last = await request('api/accounts', undefined, 'page=4')
+  assert.equal(last.value.nextPage, null)
+  assert.deepEqual(last.value.accounts.map(r => r.account.account_id), ['acct_008'])
+  assert.equal(last.value.accounts[0].autoUseQuotaCredits, null)
+  assert.equal(last.value.accounts[0].resetCardAutomation, null)
+  check('Free accounts are excluded and unsupported switches stay unavailable')
+
+  for (const [path, input] of [
+    ['api/consume', { creditId: 'acct_006_early' }],
+    ['api/refresh', {}],
+    ['api/refresh-cards', {}],
+    ['api/auto-use-quota-credits', { enabled: true }],
+    ['api/auto-use-reset-cards', { enabled: true }],
+  ]) {
+    assert.equal((await request(path, { accountId: 'acct_006', ...input })).status, 400)
+  }
+  assert.deepEqual(subscriptionReads, [])
+  assert.deepEqual(policyWrites, [])
+  assert.equal(posts.length, 0)
+  assert.equal(cardQueries, 0)
+  check('Free accounts cannot refresh, set native flags or redeem')
+
+  const setQuotaCredits = enabled => request('api/auto-use-quota-credits', { accountId: 'acct_001', enabled })
+  const setResetCards = enabled => request('api/auto-use-reset-cards', { accountId: 'acct_001', enabled })
+  const readFirst = async () => (await request('api/accounts')).value.accounts[0]
+  assert.deepEqual((await setQuotaCredits(true)).value, { enabled: true })
+  assert.equal((await readFirst()).autoUseQuotaCredits, true)
+  assert.equal((await readFirst()).resetCardAutomation.enabled, false)
+  assert.equal((await setResetCards(true)).value.next_consume_at, '2026-12-01T18:00:00Z')
+  assert.deepEqual((await setQuotaCredits(false)).value, { enabled: false })
+  assert.equal((await readFirst()).autoUseQuotaCredits, false)
+  assert.equal((await readFirst()).resetCardAutomation.enabled, true)
+  assert.equal(useQuotaCredits.get('acct_002'), true)
+  assert.equal(useResetCards.has('acct_002'), false)
+  check('Two switches write independent native settings for the selected account')
+
+  const settings = { checkIntervalSeconds: 30, cardsRefreshSeconds: 3600, batchSize: 20 }
+  records.set('settings', { value: { ...settings, automatic: true }, version: 1, schema_version: 1 })
+  records.set('automation', { value: { mode: 'all' }, version: 1, schema_version: 1 })
+  records.set('account/acct_001', { value: { ...first.state, automatic: true }, version: 1, schema_version: 1 })
+  quotas.set('acct_001', quota('acct_001', 100))
+  const writesBeforeScan = [...policyWrites]
+  await scan()
+  assert.deepEqual(policyWrites, writesBeforeScan)
+  assert.equal(posts.length, 0)
+  assert.deepEqual(subscriptionReads, ['acct_001'])
+  assert.equal(cardQueries, 1)
+  const observed = await readFirst()
+  assert.deepEqual(observed.state.subscription, subscription)
+  assert.ok(!JSON.stringify(observed).includes('ignored-profile-field'))
+  assert.deepEqual(Object.keys(observed.state.subscription).sort(), ['expiresAt', 'observedAt', 'startsAt'])
+  check('Legacy automation never redeems or writes native flags; maintenance caches only subscription dates')
+
+  await scan()
+  assert.equal(subscriptionReads.at(-1), 'acct_003')
+  assert.equal(cardQueries, 1)
+  const uncachedQuota = (await request('api/accounts', undefined, 'page=2')).value.accounts[0]
+  assert.deepEqual(uncachedQuota.state.subscription, subscription)
+  check('Subscription cache fills even when cached quota facts are unavailable')
+
+  const quotaFactsBefore = quotaFactReads.length
+  const cardQueriesBefore = cardQueries
+  const persistedBefore = records.get('account/acct_001').version
+  const subscriptionReadsBefore = subscriptionReads.length
+  records.get('scan').value.cursor = null
+  records.set('account/acct_002', {
+    value: { ...first.state, cardsCheckedAtMs: Date.now(), subscriptionCheckedAtMs: Date.now() },
+    version: 1, schema_version: 1,
+  })
+  await scan()
+  assert.equal(quotaFactReads.length, quotaFactsBefore)
+  assert.equal(cardQueries, cardQueriesBefore)
+  assert.equal(subscriptionReads.length, subscriptionReadsBefore)
+  assert.equal(records.get('account/acct_001').version, persistedBefore)
+  check('A fresh cache with no pending quota recovery makes no quota or upstream read and no account state write')
+
+  const refreshedCards = await request('api/refresh-cards', { accountId: 'acct_001' })
+  assert.equal(refreshedCards.status, 200)
+  assert.equal(refreshedCards.value.cards.availableCount, 2)
+  assert.equal(cardQueries, cardQueriesBefore + 1)
+  assert.equal(subscriptionReads.length, subscriptionReadsBefore)
+  assert.equal(refreshCalls.length, 0)
+  assert.equal(posts.length, 0)
+  check('Interactive inventory refresh queries cards without refreshing subscription, quota, or consuming a card')
+
+  activeMode = 'subscription_error'
+  const refreshed = await request('api/refresh', { accountId: 'acct_001' })
+  assert.equal(refreshed.status, 200)
+  assert.deepEqual(refreshed.value.state.subscription, subscription)
+  assert.equal(refreshed.value.quota.credits.balance, '0')
+  assert.ok(refreshCalls.includes('acct_001'))
+  activeMode = 'normal'
+  check('Manual refresh preserves last subscription when its lookup fails')
+
+  const loaded = await request('api/status')
+  assert.deepEqual(loaded.value.resetCardSettings, resetCardSettings)
+  assert.ok(!JSON.stringify(loaded).includes('settings-private-marker'))
+  resetCardSettings = { ...resetCardSettings, resetCreditOnLowWeeklyQuota: true }
+  assert.deepEqual((await request('api/status')).value.resetCardSettings, resetCardSettings)
+  activeMode = 'settings_error'
+  assert.equal((await request('api/status')).value.resetCardSettings, null)
+  activeMode = 'normal'
+  check('Status reads the current host rules, projects only reset-card fields, and tolerates unavailability')
+
   activeMode = 'downgraded';const downgradePosts=posts.length;const downgrade=await request('api/consume',{accountId:'acct_003',creditId:'acct_003_early'});assert.equal(downgrade.status,400);assert.equal(posts.length,downgradePosts);assert.equal(records.get('account/acct_003')?.value.pending??null,null);accounts[2].plan='team';activeMode='normal'
   check('A downgrade observed during refresh blocks consumption')
   consumeMode = 'uncertain'; const unknown = await request('api/consume', { accountId: 'acct_004', creditId: 'acct_004_early' }); assert.equal(unknown.status, 200); assert.ok(unknown.value.state.pending)
   const count = posts.length, original = posts.at(-1).redeemRequestId
   const duplicate = await request('api/consume', { accountId: 'acct_004', creditId: 'acct_004_late' }); assert.equal(duplicate.status, 400); assert.equal(posts.length, count)
   check('Unknown result blocks a new card operation')
-  accounts[3].plan='free';const downgradedPending=await request('api/accounts',undefined,'cursor=acct_002');assert.ok(!downgradedPending.value.accounts.some(r=>r.account.account_id==='acct_004'));assert.equal(downgradedPending.value.excludedPending[0].state.pending.requestId,original)
+  accounts[3].plan='free';const downgradedPending=await request('api/accounts',undefined,'page=2');assert.ok(!downgradedPending.value.accounts.some(r=>r.account.account_id==='acct_004'));assert.equal(downgradedPending.value.excludedPending[0].state.pending.requestId,original)
   check('Downgraded Free leaves the active list but retains an unresolved original request')
   await stop(); await start(); consumeMode = 'already_redeemed'
   const retry = await request('api/retry', { accountId: 'acct_004', requestId: original }); assert.equal(retry.status, 200); assert.equal(posts.at(-1).redeemRequestId, original); assert.equal(retry.value.state.pending, null); assert.equal(retry.value.state.history[0].code, 'already_redeemed')
@@ -231,8 +363,9 @@ try {
   consumeMode = 'unexpected_code'
   const unexpected = await request('api/retry', { accountId: 'acct_005', requestId: invalid.value.state.pending.requestId }); assert.ok(unexpected.value.state.pending)
   check('Unrecognized upstream result does not clear pending operation')
-  consumeMode='reset';on=await automatic(true);assert.equal(on.status,200);records.get('account/acct_001').value.awaitingRecovery=false;records.get('account/acct_001').value.lastAttemptAtMs=Date.now()-120000;quotas.set('acct_001',quota('acct_001',100));records.get('scan').value.cursor=null;activeMode='automation_off';const beforeOffDuringRefresh=posts.length;await scan();assert.equal(posts.length,beforeOffDuringRefresh);assert.equal(records.get('settings').value.automatic,false);activeMode='normal'
-  check('Master off observed during upstream refresh prevents a pending automatic redemption')
-  assert.ok(!reads.includes('host.auth.get')); assert.ok(!reads.includes('host.auth.save')); check('No credentials are read or account settings modified')
+  assert.deepEqual(policyWrites, writesBeforeScan)
+  assert.ok(!reads.includes('host.auth.get'))
+  assert.ok(!reads.includes('host.auth.save'))
+  check('No raw credentials are read or saved')
   await stop(); console.log(JSON.stringify({ passed: passed.length, tests: passed, mockRedemptions: posts.length, productionRequests: 0 }, null, 2))
 } catch (e) { child?.kill(); console.error(e); process.exitCode = 1 }
