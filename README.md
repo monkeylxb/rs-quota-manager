@@ -1,20 +1,20 @@
 # 周限与重置卡
 
-独立 RS 网关插件，插件 ID 为 `personal.quota-manager`，当前源码版本 `0.1.5`，公开版本以 Releases 为准
+独立 RS 网关插件，插件 ID 为 `personal.quota-manager`，当前源码版本 `0.1.6`，公开版本以 Releases 为准
 
-基于上游 `v3.26.2` 的公开 SDK，固定提交 `ae5eaa46b447548571e6c46d69bd27d454adb785`，清单和进程协议为 v2，声明 management v1 与 maintenance v1
+基于上游 `v3.54.0` 的公开 SDK，固定提交 `a770419818117098c43919a5c6553cc7023ecf71`。使用清单 v2、进程 RPC v7、管理能力 v2、维护能力 v1 和页面宿主桥 v2。
 
 ## 安装与兼容
 
-- 下载：[安装包与校验文件](https://github.com/Lemon-57/rs-quota-manager/releases)
-- 宿主兼容范围：`>=3.26.2, <3.28.0`，已核对 v3.27.1 的账号、额度与卡片接口契约，实际安装验证范围见对应发行说明。
-- 当前制品：Linux x86_64，glibc 2.28 及以上。尚未发布 ARM64、Windows 或 macOS 安装包。
+- 下载：[安装包与校验文件](https://github.com/monkeylxb/rs-quota-manager/releases)
+- v0.1.6 源码声明兼容 RS `>=3.54.0, <3.55.0`。按对应 Release 的兼容范围选包。
+- Linux x86_64 安装包要求 glibc 2.28 及以上。
 - 插件 ID：`personal.quota-manager`。为保留既有安装配置和私有状态，继续沿用该身份。
 - 许可证：Apache-2.0，第三方来源见 [LICENSES/NOTICE.md](LICENSES/NOTICE.md)。
 
-在 RS 的“插件管理 → 安装插件 → GitHub”中填写 `Lemon-57/rs-quota-manager`，版本标签留空查询最新稳定版，选择匹配架构的 `.tar.gz` 附件。
-也可从 Release 下载 `.tar.gz` 与 `checksums.txt`，核对 SHA-256 后，通过“上传”安装。不要上传 GitHub 自动生成的 Source code 归档。
-安装时确认来源与插件权限，创建并启用配置，再从侧栏打开“周限与重置卡”。已有安装可通过宿主版本切换更新，保留实例与私有状态。
+在 RS 的“插件管理 → 安装插件 → GitHub”中填写 `monkeylxb/rs-quota-manager`，选择标签 `v0.1.6` 下匹配架构的 `.tar.gz` 附件。
+也可下载同一 Release 中的 `.tar.gz` 和 `.tar.gz.sha256`，核对 SHA-256 后，通过“上传”安装。
+首次安装时确认来源和信任，宿主会创建并启用默认配置。已有安装可通过宿主版本切换更新，保留实例与私有状态。随后从侧栏打开“周限与重置卡”。
 
 以下截图全部为本地模拟数据，不含真实账号、卡片或消费结果。
 
@@ -32,7 +32,7 @@ CSV 包含账号 ID、完整名称和邮箱，若原名称含敏感内容，请�
 
 ## 使用
 
-在网关的插件管理中上传安装 `dist/personal.quota-manager-0.1.5-x86_64-unknown-linux-gnu.tar.gz`，核对旁边的 SHA-256 文件，接受来源并确认配置处于启用状态，再打开“周限与重置卡”页面
+在网关的插件管理中上传安装 `dist/personal.quota-manager-0.1.6-x86_64-unknown-linux-gnu.tar.gz`，核对旁边的 SHA-256 文件，接受来源并确认配置处于启用状态，再打开“周限与重置卡”页面
 
 - 读取 RS 当前账号套餐和启用状态，排除套餐为 Free 的账号，账号列只显示完整邮箱，无邮箱时回退到名称；列表同时显示会员标识、周限、刷新时间、卡张数及到期时间，内部 ID 与账号名称仍参与搜索和导出
 - 按宿主真实 `planType` 判断套餐，名称带 `team+` 的 Free 同样排除，列表、汇总、后台查询和新消费共用该规则
@@ -66,24 +66,24 @@ UUID 在消费前通过宿主私有状态持久化，结果不确定时暂停该
 ## 构建
 
 全部构建与验证在本机运行，生产服务器只接收完成的安装包
-Rust 使用 1.97.0，前端使用 Node 24 和 pnpm，SDK 与前端依赖由锁文件固定
+Rust 使用 1.99.1，前端使用 Node 24 和 pnpm，SDK 与前端依赖由锁文件固定
 
 ```powershell
 pnpm --dir frontend install --frozen-lockfile
 pnpm --dir frontend build
-cargo +1.97.0 fmt --manifest-path backend/Cargo.toml -- --check
-cargo +1.97.0 clippy --manifest-path backend/Cargo.toml --all-targets --locked -- -D warnings
-cargo +1.97.0 test --manifest-path backend/Cargo.toml --locked
-cargo +1.97.0 build --manifest-path backend/Cargo.toml --locked
+cargo +1.99.1 fmt --manifest-path backend/Cargo.toml -- --check
+cargo +1.99.1 clippy --manifest-path backend/Cargo.toml --all-targets --locked -- -D warnings
+cargo +1.99.1 test --manifest-path backend/Cargo.toml --locked
+cargo +1.99.1 build --manifest-path backend/Cargo.toml --locked
 node verification/protocol-test.mjs
 node verification/frontend-test.mjs
 ```
 
-Windows 本机生成 Linux 制品需要安装 Zig、cargo-zigbuild 和 Rust Linux target，把 Zig 与 cargo-zigbuild 加入 PATH
+交叉构建 Linux 制品需要安装 Zig、cargo-zigbuild 和 Rust Linux target，把 Zig 与 cargo-zigbuild 加入 PATH
 
 ```powershell
-rustup target add x86_64-unknown-linux-gnu --toolchain 1.97.0
-cargo +1.97.0 zigbuild --manifest-path backend/Cargo.toml --release --locked --target x86_64-unknown-linux-gnu.2.28
+rustup target add x86_64-unknown-linux-gnu --toolchain 1.99.1
+cargo +1.99.1 zigbuild --manifest-path backend/Cargo.toml --release --locked --target x86_64-unknown-linux-gnu.2.28
 cpr-plugin package --manifest plugin.json --binary backend/target/x86_64-unknown-linux-gnu/release/quota-manager --target x86_64-unknown-linux-gnu --resource-map web=frontend/dist --resource-map legal=LICENSES --output-dir dist
 ```
 
@@ -103,7 +103,6 @@ UI 通过官方 v0.4.1 编译发行包安装，SHA-256 与官方校验文件一�
 测试不访问真实网关或真实上游，不消费真实卡片
 
 `pnpm --dir frontend dev --port 5176` 提供带明确标识的本地模拟预览，发行页面只使用 `window.codexProxyPlugin` 宿主桥，不请求管理员密码或读取管理 Cookie
-安装包声明兼容 `>=3.26.2, <3.28.0`，已在 v3.26.2 宿主验证页面加载和真实账号分页，真实卡片消费未执行
 
 ## 页面加载排查
 
