@@ -9,7 +9,10 @@ use gateway_plugin_sdk::{
     PluginFault,
     call::{
         data::QuotaFactsQuery,
-        host::{AuthListResult, AuthRuntimeAccount},
+        host::{
+            AUTH_GET_RUNTIME, AUTH_LIST, AuthGetRequest, AuthListRequest, AuthListResult,
+            AuthRuntimeAccount,
+        },
     },
     client::HostClient,
 };
@@ -25,12 +28,16 @@ pub async fn accounts_page(
     cursor: Option<&str>,
     limit: u16,
 ) -> Result<AuthListResult, PluginFault> {
+    let request = AuthListRequest {
+        provider_id: provider.map(str::to_owned),
+        cursor: cursor.map(str::to_owned),
+        limit,
+    };
     let reply = host
         .call(
-            "host.auth.list",
+            AUTH_LIST,
             json!({}),
-            serde_json::to_vec(&json!({"provider_id":provider,"cursor":cursor,"limit":limit}))
-                .map_err(|_| fault("分页参数无效"))?,
+            serde_json::to_vec(&request).map_err(|_| fault("分页参数无效"))?,
         )
         .await
         .map_err(|e| e.into_plugin_fault())?;
@@ -45,11 +52,14 @@ pub fn require_non_free(account: &AuthRuntimeAccount) -> Result<(), PluginFault>
 }
 
 pub async fn detail(host: &HostClient, id: &str) -> Result<AuthRuntimeAccount, PluginFault> {
+    let request = AuthGetRequest {
+        account_id: id.to_owned(),
+    };
     let reply = host
         .call(
-            "host.auth.get_runtime",
+            AUTH_GET_RUNTIME,
             json!({}),
-            serde_json::to_vec(&json!({"account_id":id})).map_err(|_| fault("账号参数无效"))?,
+            serde_json::to_vec(&request).map_err(|_| fault("账号参数无效"))?,
         )
         .await
         .map_err(|e| e.into_plugin_fault())?;
