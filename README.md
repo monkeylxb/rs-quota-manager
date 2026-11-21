@@ -1,18 +1,18 @@
 # 周限与重置卡
 
-独立 RS 网关插件，插件 ID 为 `personal.quota-manager`，当前源码版本 `0.1.6`，公开版本以 Releases 为准
+独立 RS 网关插件，插件 ID 为 `personal.quota-manager`，当前源码版本 `0.1.7`，公开版本以 Releases 为准
 
 基于上游 `v3.54.0` 的公开 SDK，固定提交 `a770419818117098c43919a5c6553cc7023ecf71`。使用清单 v2、进程 RPC v7、管理能力 v2、维护能力 v1 和页面宿主桥 v2。
 
 ## 安装与兼容
 
 - 下载：[安装包与校验文件](https://github.com/monkeylxb/rs-quota-manager/releases)
-- v0.1.6 源码声明兼容 RS `>=3.54.0, <3.55.0`。按对应 Release 的兼容范围选包。
+- 源码声明兼容 RS `>=3.54.0, <3.55.0`。按对应 Release 的兼容范围选包。
 - Linux x86_64 安装包要求 glibc 2.28 及以上。
 - 插件 ID：`personal.quota-manager`。为保留既有安装配置和私有状态，继续沿用该身份。
 - 许可证：Apache-2.0，第三方来源见 [LICENSES/NOTICE.md](LICENSES/NOTICE.md)。
 
-在 RS 的“插件管理 → 安装插件 → GitHub”中填写 `monkeylxb/rs-quota-manager`，选择标签 `v0.1.6` 下匹配架构的 `.tar.gz` 附件。
+在 RS 的“插件管理 → 安装插件 → GitHub”中填写 `monkeylxb/rs-quota-manager`，选择指定版本下匹配架构的 `.tar.gz` 附件。
 也可下载同一 Release 中的 `.tar.gz` 和 `.tar.gz.sha256`，核对 SHA-256 后，通过“上传”安装。
 首次安装时确认来源和信任，宿主会创建并启用默认配置。已有安装可通过宿主版本切换更新，保留实例与私有状态。随后从侧栏打开“周限与重置卡”。
 
@@ -32,7 +32,7 @@ CSV 包含账号 ID、完整名称和邮箱，若原名称含敏感内容，请�
 
 ## 使用
 
-在网关的插件管理中上传安装 `dist/personal.quota-manager-0.1.6-x86_64-unknown-linux-gnu.tar.gz`，核对旁边的 SHA-256 文件，接受来源并确认配置处于启用状态，再打开“周限与重置卡”页面
+在网关的插件管理中上传安装 `dist/personal.quota-manager-0.1.7-x86_64-unknown-linux-gnu.tar.gz`，核对旁边的 SHA-256 文件，接受来源并确认配置处于启用状态，再打开“周限与重置卡”页面
 
 - 读取 RS 当前账号套餐和启用状态，排除套餐为 Free 的账号，账号列只显示完整邮箱，无邮箱时回退到名称；列表同时显示会员标识、周限、刷新时间、卡张数及到期时间，内部 ID 与账号名称仍参与搜索和导出
 - 按宿主真实 `planType` 判断套餐，名称带 `team+` 的 Free 同样排除，列表、汇总、后台查询和新消费共用该规则
