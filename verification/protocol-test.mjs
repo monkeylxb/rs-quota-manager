@@ -2,7 +2,13 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-const binary = process.argv[2] || fileURLToPath(new URL('../backend/target/debug/quota-manager.exe', import.meta.url))
+const executable = process.platform === 'win32' ? 'quota-manager.exe' : 'quota-manager'
+const binary = process.argv[2] || fileURLToPath(new URL(`../backend/target/debug/${executable}`, import.meta.url))
+const protocolVersion = 7
+const contributes = {
+  management: { id: 'personal.quota-manager.management', version: 2, stages: ['management'], inputFormats: [], outputFormats: [] },
+  maintenance: { id: 'personal.quota-manager.maintenance', version: 1, stages: ['maintenance'], inputFormats: [], outputFormats: [] },
+}
 const stamp = Date.now()
 const account = (id, enabled = true, plan = 'team') => ({ account_id: id, provider_id: 'openai', name: `team+${id}+2026/10/28+workspace3`, email: `${id}@example.com`, group_ids: [], enabled, updated_at_ms: stamp, plan })
 const accounts = [account('acct_001'), account('acct_002', false), account('acct_003'), account('acct_004'), account('acct_005'), account('acct_006', true, 'free'), account('acct_007', true, ' Free '), account('acct_008', true, 'plus')]
@@ -18,17 +24,22 @@ const runtimeAccount = a => ({ account_id: a.account_id, provider_id: a.provider
   credential_revision: 1, upstream_user_id: null, upstream_account_id: null, plan_type: a.plan, authentication_kind: 'oauth', credential_state: 'ready', has_refresh_token: true, access_token_expires_at_ms: null, next_refresh_at_ms: null })
 let consumeMode = 'reset', child, buffered, pending, ready, sequence = 99, errors = '', activeMode = 'normal', incarnation, handleSequence = 0, runtimeReads = 0, cardQueries = 0, failSelectionWrite = false
 
-function send(meta, payload = Buffer.alloc(0)) {
+function send(meta, data, payload = Buffer.alloc(0)) {
   if (!(payload instanceof Buffer)) payload = Buffer.from(JSON.stringify(payload))
+  if (data !== undefined) {
+    const dataBytes = Buffer.from(JSON.stringify(data))
+    meta = { ...meta, data_bytes: dataBytes.length }
+    payload = Buffer.concat([dataBytes, payload])
+  }
   const json = Buffer.from(JSON.stringify(meta)), header = Buffer.alloc(12)
   header.writeUInt32BE(json.length); header.writeBigUInt64BE(BigInt(payload.length), 4)
   child.stdin.write(Buffer.concat([header, json, payload]))
 }
-function result(id, value = {}, payload = Buffer.alloc(0)) { send({ type: 'result', id, result: value }, payload) }
+function result(id, value = {}, payload = Buffer.alloc(0)) { send({ type: 'result', id }, value, payload) }
 function error(id, code = 'rejected') { send({ type: 'error', id, error: { code, message: 'mock rejection', send_state: 'not_sent' } }) }
-async function callback(meta, payload) {
+async function callback(meta, params, payload) {
   reads.push(meta.method)
-  const data = payload.length ? JSON.parse(payload.toString()) : meta.params
+  const data = payload.length ? JSON.parse(payload.toString()) : params
   if (meta.method === 'host.data.accounts.list' || meta.method === 'host.auth.list') {
     const start = data.cursor ? accounts.findIndex(a => a.account_id === data.cursor) + 1 : 0
     const batch = accounts.slice(start, start + Math.min(data.limit, 2))
@@ -54,12 +65,12 @@ async function callback(meta, payload) {
     return result(meta.id, { version })
   }
   if (meta.method === 'host.http.dispatch') {
-    const url = new URL(meta.params.uri, 'http://mock.invalid'), id = url.searchParams.get('accountId') || data.accountId
+    const url = new URL(params.uri, 'http://mock.invalid'), id = url.searchParams.get('accountId') || data.accountId
     assert.equal(url.pathname, '/api/admin/accounts/reset-credits')
     let envelope
-    if (meta.params.method === 'GET') { cardQueries++; envelope = { code: 200, message: 'ok', data: cards.get(id) }; if (activeMode === 'downgraded') accounts.find(a=>a.account_id===id).plan = 'free'; if (activeMode === 'automation_off') { records.get('settings').value.automatic = false; records.get('settings').version++ } }
+    if (params.method === 'GET') { cardQueries++; envelope = { code: 200, message: 'ok', data: cards.get(id) }; if (activeMode === 'downgraded') accounts.find(a=>a.account_id===id).plan = 'free'; if (activeMode === 'automation_off') { records.get('settings').value.automatic = false; records.get('settings').version++ } }
     else {
-      assert.equal(meta.params.method, 'POST')
+      assert.equal(params.method, 'POST')
       const state = records.get(`account/${id}`).value
       assert.equal(state.pending.requestId, data.redeemRequestId, 'Pending UUID must be durable before POST')
       assert.equal(state.pending.creditId, data.creditId)
@@ -78,8 +89,8 @@ async function callback(meta, payload) {
     return result(meta.id, { status: 200, version: 'HTTP/1.1', headers: [], body: { kind: 'handle', handle }, response: null, session: false })
   }
   if (meta.method === 'host.http.body_read') {
-    const value = handles.get(meta.params.handle)
-    if (value) { handles.delete(meta.params.handle); return result(meta.id, { eof: false, trailers: null }, value) }
+    const value = handles.get(params.handle)
+    if (value) { handles.delete(params.handle); return result(meta.id, { eof: false, trailers: null }, value) }
     return result(meta.id, { eof: true, trailers: null })
   }
   if (meta.method === 'host.http.body_close') return result(meta.id, {})
@@ -89,12 +100,38 @@ function parse() {
   while (buffered.length >= 12) {
     const m = buffered.readUInt32BE(), p = Number(buffered.readBigUInt64BE(4)), total = 12 + m + p
     if (buffered.length < total) return
-    const meta = JSON.parse(buffered.subarray(12, 12 + m).toString()), payload = buffered.subarray(12 + m, total); buffered = buffered.subarray(total)
-    if (meta.type === 'ready') ready.resolve()
-    else if (meta.type === 'callback') callback(meta, payload).catch(e => { ready.reject(e); for (const x of pending.values()) x.reject(e) })
+    const meta = JSON.parse(buffered.subarray(12, 12 + m).toString())
+    const dataStart = 12 + m + (meta.request_context_bytes ?? 0)
+    const dataEnd = dataStart + (meta.data_bytes ?? 0)
+    assert.ok(dataEnd <= total)
+    const data = meta.data_bytes ? JSON.parse(buffered.subarray(dataStart, dataEnd).toString()) : undefined
+    const payload = buffered.subarray(dataEnd, total)
+    buffered = buffered.subarray(total)
+    if (meta.type === 'ready') {
+      assert.equal(meta.protocol_version, protocolVersion)
+      assert.equal(meta.incarnation, incarnation)
+      ready.resolve()
+    }
+    else if (meta.type === 'callback') {
+      assert.ok(pending.has(meta.parent_id))
+      callback(meta, data, payload).catch(e => { ready.reject(e); for (const x of pending.values()) x.reject(e) })
+    }
+    else if (meta.type === 'suspend') {
+      const waiter = pending.get(meta.id)
+      assert.ok(waiter && !waiter.suspended)
+      assert.equal(meta.epoch, ++waiter.epoch)
+      waiter.suspended = true
+    }
+    else if (meta.type === 'resume') {
+      const waiter = pending.get(meta.id)
+      assert.ok(waiter?.suspended)
+      assert.equal(meta.epoch, waiter.epoch)
+      waiter.suspended = false
+      send({ type: 'resumed', id: meta.id, epoch: meta.epoch })
+    }
     else if (meta.type === 'result' || meta.type === 'error') {
       const waiter = pending.get(meta.id)
-      if (waiter) { pending.delete(meta.id); meta.type === 'error' ? waiter.reject(new Error(JSON.stringify(meta.error))) : waiter.resolve({ result: meta.result, payload }) }
+      if (waiter) { pending.delete(meta.id); meta.type === 'error' ? waiter.reject(new Error(JSON.stringify(meta.error))) : waiter.resolve({ result: data, payload }) }
     }
   }
 }
@@ -104,15 +141,16 @@ async function start() {
   child.stdout.on('data', data => { buffered = Buffer.concat([buffered, data]); parse() })
   child.stderr.on('data', data => { errors += data }); child.on('error', e => ready.reject(e))
   child.on('exit', code => { if (code) { const e = new Error(`Plugin exited ${code}: ${errors}`); ready.reject(e); for (const w of pending.values()) w.reject(e) } })
-  send({ type: 'hello', handshake: { protocol_version: 2, artifact_sha256: 'a'.repeat(64), plugin_id: 'personal.quota-manager', instance_id: 'test_instance', generation: 1, incarnation, configuration: {}, contributes: {
-    management: { id: 'personal.quota-manager.management', version: 1, stages: ['management'] }, maintenance: { id: 'personal.quota-manager.maintenance', version: 1, stages: ['maintenance'] },
-  } } })
+  send({ type: 'hello', handshake: { protocol_version: protocolVersion, artifact_sha256: 'a'.repeat(64), plugin_id: 'personal.quota-manager', instance_id: 'test_instance', generation: 1, incarnation, contributes } }, {})
   await Promise.race([ready.promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`Handshake timeout: ${errors}`)), 10000).unref())])
 }
 async function stop() { const exited = new Promise(resolve => child.once('exit', resolve)); send({ type: 'shutdown' }); child.stdin.end(); await exited }
 async function call(method, params = {}, payload = Buffer.alloc(0), stage = 'management') {
   const id = sequence += 2, waiter = Promise.withResolvers(); pending.set(id, waiter)
-  send({ type: 'call', id, method, params, context: { call_id: id, instance_id: 'test_instance', generation: 1, incarnation, stage, timeout_ms: 60000, resource_stream: false, resource_scope_id: `scope_${id}` } }, payload)
+  waiter.epoch = 0
+  waiter.suspended = false
+  const timeoutMs = stage === 'registration' ? 5000 : 60000
+  send({ type: 'call', id, method, context: { call_id: id, instance_id: 'test_instance', generation: 1, incarnation, stage, timeout_ms: timeoutMs, resource_stream: false, resource_scope_id: `scope_${id}` } }, params, payload)
   return Promise.race([waiter.promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`Call timeout ${method}: ${errors}`)), 10000).unref())])
 }
 async function request(path, body, query = '') {
@@ -123,9 +161,11 @@ async function scan() { const s = records.get('scan'); if (s) s.value.nextAtMs =
 const passed = [], check = label => { passed.push(label); console.log(`PASS ${label}`) }
 try {
   await start()
+  const pluginRegistration = await call('plugin.register', {}, Buffer.alloc(0), 'registration')
+  assert.deepEqual(pluginRegistration.result.contributes, contributes)
   const registrationReply = await call('management.register', {}, Buffer.alloc(0), 'registration')
   const registration = JSON.parse(registrationReply.payload.toString()); assert.equal(registration.pages[0].entry, 'web/index.html'); assert.equal(registration.routes.length, 8)
-  check('SDK v2 handshake and management registration')
+  check('RPC v7 handshake and management v2 registration')
   const page = await request('api/accounts'); assert.equal(page.status, 200); assert.equal(page.value.accounts.length, 2); assert.equal(page.value.nextCursor, 'acct_002'); assert.equal(page.value.accounts[0].account.name, accounts[0].name)
   assert.equal(page.value.accounts[0].account.plan_type, 'team'); assert.equal(page.value.accounts[1].account.enabled, false)
   assert.ok(page.value.accounts.every(row=>!row.state.automatic))
