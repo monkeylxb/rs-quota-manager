@@ -2,8 +2,8 @@
 
 use crate::{
     engine,
-    host::{fault, load, now, save},
-    model::*,
+    host::{fault, now},
+    model::is_free,
     native,
 };
 use gateway_plugin_sdk::{
@@ -31,9 +31,6 @@ pub fn registration() -> ManagementRegistration {
             route("GET", "api/status"),
             route("POST", "api/auto-use-quota-credits"),
             route("POST", "api/auto-use-reset-cards"),
-            route("POST", "api/refresh"),
-            route("POST", "api/refresh-cards"),
-            route("POST", "api/consume"),
             route("POST", "api/retry"),
         ],
         resources: ["web/index.html", "web/app.js", "web/app.css"]
@@ -46,7 +43,7 @@ pub fn registration() -> ManagementRegistration {
         pages: vec![ManagementPage {
             id: "quota-manager".into(),
             title: "周限与重置卡".into(),
-            description: Some("账号额度与重置记录".into()),
+            description: Some("宿主额度快照与自动用卡计划".into()),
             entry: "web/index.html".into(),
             icon: None,
         }],
@@ -58,8 +55,6 @@ pub fn registration() -> ManagementRegistration {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AccountRequest {
     account_id: String,
-    #[serde(default)]
-    credit_id: Option<String>,
     #[serde(default)]
     request_id: Option<String>,
     #[serde(default)]
@@ -73,9 +68,8 @@ async fn handle_inner(call: TypedCall<ManagementRequest>) -> Result<Value, Plugi
             return Err(fault("查询不能包含正文"));
         }
         if call.request.path == "api/status" {
-            let (scan, _) = load::<Scan>(host, "scan").await?;
             let reset_cards = native::reset_card_settings(host).await.ok();
-            return Ok(json!({"scan":scan,"resetCardSettings":reset_cards}));
+            return Ok(json!({"resetCardSettings":reset_cards}));
         }
         if call.request.path == "api/accounts" {
             let mut page_number = 1;
@@ -95,14 +89,15 @@ async fn handle_inner(call: TypedCall<ManagementRequest>) -> Result<Value, Plugi
             let mut rows = Vec::new();
             let mut excluded_pending = Vec::new();
             for account in page.items {
-                let (state, _) = load::<AccountState>(host, &engine::key(&account.id)).await?;
+                let free = is_free(account.plan_type.as_deref());
+                let (state, quota) = engine::account_snapshot(host, &account.id, !free).await?;
                 let account_view = json!({
                     "account_id": account.id, "provider_id": account.provider, "name": account.name,
                     "email": account.email, "enabled": account.enabled,
                     "authentication_kind": account.authentication_kind,
                     "plan_type": account.plan_type, "plan_type_display": account.plan_type_display,
                 });
-                if is_free(account.plan_type.as_deref()) {
+                if free {
                     if state.pending.is_some() {
                         excluded_pending.push(json!({
                             "account": account_view, "quota": null, "state": state,
@@ -118,12 +113,6 @@ async fn handle_inner(call: TypedCall<ManagementRequest>) -> Result<Value, Plugi
                 } else {
                     None
                 };
-                let quota = host
-                    .quota_details(QuotaFactsQuery {
-                        account_id: account.id,
-                    })
-                    .await
-                    .ok();
                 rows.push(json!({
                     "account": account_view, "quota": quota, "state": state,
                     "autoUseQuotaCredits": account.capabilities.quota_credits
@@ -164,54 +153,12 @@ async fn handle_inner(call: TypedCall<ManagementRequest>) -> Result<Value, Plugi
                 Ok(json!(automation))
             }
         }
-        "api/refresh" | "api/refresh-cards" => {
-            let (mut state, version) = load::<AccountState>(host, &engine::key(id)).await?;
-            let account = engine::detail(host, id).await?;
-            engine::require_non_free(&account)?;
-            if account.provider_id != "openai" || account.authentication_kind != "oauth" {
-                return Err(fault("该账号不支持重置卡"));
-            }
-            if call.request.path == "api/refresh-cards" {
-                let refreshed = engine::refresh_cards(host, id, &mut state).await;
-                save(host, &engine::key(id), &state, version).await?;
-                refreshed?;
-                return Ok(json!(state));
-            }
-            let quota = host
-                .refresh_account_quota(QuotaFactsQuery {
-                    account_id: id.into(),
-                })
-                .await
-                .ok();
-            if let Some(q) = &quota {
-                state.note_recovery(q);
-            }
-            engine::refresh_subscription(host, id, &mut state).await;
-            let refreshed = engine::refresh_cards(host, id, &mut state).await;
-            save(host, &engine::key(id), &state, version).await?;
-            refreshed?;
-            let quota = host
-                .quota_details(QuotaFactsQuery {
-                    account_id: id.into(),
-                })
-                .await
-                .ok();
-            Ok(json!({"state":state,"quota":quota}))
-        }
-        "api/consume" | "api/retry" => {
-            if call.request.path == "api/retry" && request.request_id.is_none() {
-                return Err(fault("缺少原操作标识"));
-            }
-            if call.request.path == "api/consume" && request.request_id.is_some() {
-                return Err(fault("新操作不能复用确认路由"));
-            }
-            let state = engine::consume(
-                host,
-                id,
-                request.credit_id.as_deref(),
-                request.request_id.as_deref(),
-            )
-            .await?;
+        "api/retry" => {
+            let request_id = request
+                .request_id
+                .as_deref()
+                .ok_or_else(|| fault("缺少原操作标识"))?;
+            let state = engine::confirm_pending(host, id, request_id).await?;
             let quota = host
                 .quota_details(QuotaFactsQuery {
                     account_id: id.into(),

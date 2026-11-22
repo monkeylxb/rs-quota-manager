@@ -126,10 +126,3 @@ pub async fn admin(
         .cloned()
         .ok_or_else(|| fault("宿主响应缺少数据"))
 }
-
-pub fn account_path(path: &str, account_id: &str) -> String {
-    let query = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("accountId", account_id)
-        .finish();
-    format!("/api/admin/accounts/{path}?{query}")
-}

@@ -1,10 +1,9 @@
-import type { Card, Event, Page, PageStatus, Pending, Quota, QuotaCredits, ResetCardAutomation, ResetCardSettings, Row, State, Subscription } from '../../types'
+import type { Event, Page, PageStatus, Pending, Quota, QuotaCredits, ResetCardAutomation, ResetCardSettings, Row, State } from '../../types'
 import { array, boolean, nonNegativeInteger as integer, nullable, number, record, string } from '../validation'
 
 export function parseStatus(input: unknown): PageStatus {
-  const v = record(input, '巡检状态')
+  const v = record(input, '页面设置')
   return {
-    scan: { checkedAtMs: nullable(record(v.scan, '巡检').checkedAtMs, integer, '巡检时间') },
     resetCardSettings: nullable(v.resetCardSettings, parseResetCardSettings, '主动重置卡设置'),
   }
 }
@@ -16,10 +15,6 @@ function parseResetCardSettings(input: unknown): ResetCardSettings {
     resetCreditMaxWeeklyRemainingPercent: nullable(v.resetCreditMaxWeeklyRemainingPercent, integer, '剩余周额度上限'),
   }
 }
-function parseCard(input: unknown): Card {
-  const v = record(input, '重置卡')
-  return { id: string(v.id, '卡片标识'), status: nullable(v.status, string, '卡片状态'), title: nullable(v.title, string, '卡片标题'), expiresAt: nullable(v.expiresAt, string, '卡片到期时间'), expiresAtDisplay: nullable(v.expiresAtDisplay, string, '到期显示'), resetType: nullable(v.resetType, string, '重置类型') }
-}
 function parsePending(input: unknown): Pending {
   const v = record(input, '未决操作')
   return { requestId: string(v.requestId, '请求标识'), creditId: nullable(v.creditId, string, '卡片标识'), startedAtMs: integer(v.startedAtMs, '发起时间'), automatic: boolean(v.automatic, '自动操作') }
@@ -28,23 +23,14 @@ function parseEvent(input: unknown): Event {
   const v = record(input, '消费记录')
   return { atMs: integer(v.atMs, '消费时间'), requestId: string(v.requestId, '请求标识'), creditId: nullable(v.creditId, string, '卡片标识'), automatic: boolean(v.automatic, '自动操作'), code: string(v.code, '业务结果') }
 }
-function parseSubscription(input: unknown): Subscription {
-  const v = record(input, '订阅周期')
-  return { startsAt: nullable(v.startsAt, string, '订阅开始'), expiresAt: string(v.expiresAt, '订阅结束'), observedAt: string(v.observedAt, '订阅查询时间') }
-}
 function parseQuotaCredits(input: unknown): QuotaCredits {
   const v = record(input, '额度点数')
   return { has_credits: boolean(v.has_credits, '点数可用状态'), unlimited: boolean(v.unlimited, '点数不限量'), balance: nullable(v.balance, string, '点数余额') }
 }
-export function parseState(input: unknown): State {
+function parseState(input: unknown): State {
   const v = record(input, '账号状态')
-  const cards = v.cards === null ? null : record(v.cards, '卡片库存')
   return {
-    subscription: nullable(v.subscription, parseSubscription, '订阅周期'),
-    subscriptionCheckedAtMs: nullable(v.subscriptionCheckedAtMs, integer, '订阅检查时间'),
-    cards: cards === null ? null : { availableCount: integer(cards.availableCount, '卡片数量'), credits: array(cards.credits, parseCard, '卡片列表') },
-    cardsObservedAtMs: nullable(v.cardsObservedAtMs, integer, '卡片观测时间'), cardsCheckedAtMs: nullable(v.cardsCheckedAtMs, integer, '卡片检查时间'),
-    error: nullable(v.error, string, '检查错误'), pending: nullable(v.pending, parsePending, '未决操作'),
+    error: nullable(v.error, string, '重置错误'), pending: nullable(v.pending, parsePending, '未决操作'),
     awaitingRecovery: boolean(v.awaitingRecovery, '等待回读'), lastAttemptAtMs: nullable(v.lastAttemptAtMs, integer, '上次发起时间'), history: array(v.history, parseEvent, '消费记录'),
   }
 }
@@ -79,6 +65,7 @@ export function parseResetCardAutomation(input: unknown): ResetCardAutomation {
   const v = record(input, '自动使用重置卡')
   return {
     enabled: boolean(v.enabled, '自动使用重置卡'),
+    next_discovery_at: nullable(v.next_discovery_at, string, '计划查卡时间'),
     next_consume_at: nullable(v.next_consume_at, string, '计划用卡时间'),
     last_result: nullable(v.last_result, string, '上次用卡状态'),
   }

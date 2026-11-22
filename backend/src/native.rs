@@ -1,8 +1,5 @@
-//! 复用宿主账号目录、订阅查询和自动使用设置
-use crate::{
-    host::{account_path, admin, fault},
-    model::Subscription,
-};
+//! 复用宿主账号目录和自动使用设置
+use crate::host::{admin, fault};
 use gateway_plugin_sdk::{
     PluginFault,
     call::services::accounts::{
@@ -53,19 +50,6 @@ pub async fn accounts(host: &HostClient, page: u32) -> Result<AccountPage, Plugi
     let path = format!("/api/admin/accounts?page={page}&pageSize=20");
     let data = admin(host, "GET", &path, None).await?;
     serde_json::from_value(data).map_err(|_| fault("宿主账号列表无效"))
-}
-
-pub async fn subscription(
-    host: &HostClient,
-    id: &str,
-) -> Result<Option<Subscription>, PluginFault> {
-    #[derive(Deserialize)]
-    struct PersonalInfo {
-        subscription: Option<Subscription>,
-    }
-    let data = admin(host, "GET", &account_path("personal-info", id), None).await?;
-    let info: PersonalInfo = serde_json::from_value(data).map_err(|_| fault("宿主订阅信息无效"))?;
-    Ok(info.subscription)
 }
 
 #[derive(Deserialize, Serialize)]

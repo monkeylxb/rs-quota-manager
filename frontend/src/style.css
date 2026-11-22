@@ -9,7 +9,6 @@ body { margin: 0; min-width: 0; min-height: inherit; font-size: var(--cp-font-si
 .metric span:not(.metric-icon) { color: var(--cp-color-text-secondary); font-size: 12px; }
 .metric strong { font-size: 26px; line-height: 1.4; font-weight: 700; font-variant-numeric: tabular-nums; }
 .metric small { font-size: 11px; color: var(--cp-color-text-quaternary); margin-top: 2px; }
-.metric em { font-size: 12px; font-style: normal; font-weight: 500; }
 .metric-icon { display: flex; width: 36px; height: 36px; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 8px; }
 .tone-blue { background: var(--cp-color-blue-container-strong); color: var(--cp-color-blue-on-container); }
 .tone-green { background: var(--cp-color-green-container-strong); color: var(--cp-color-green-on-container); }
@@ -40,18 +39,14 @@ body { margin: 0; min-width: 0; min-height: inherit; font-size: var(--cp-font-si
 .quota-track { width: 100%; height: 4px; border-radius: 2px; overflow: hidden; background: var(--cp-color-fill-tertiary); margin-top: 7px; }
 .quota-track i { display: block; height: 100%; background: var(--cp-color-success); }
 .quota-track i.exhausted { background: var(--cp-color-error); }
-.date, .expiry { display: block; font-size: 12px; line-height: 1.6; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.credits-cell { display: grid; gap: 2px; min-width: 0; }
-.credit-count { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; color: var(--cp-color-success-text); }
-.credit-count.muted { color: var(--cp-color-text-quaternary); font-weight: 500; }
-.expiry { font-size: 11px; color: var(--cp-color-text-secondary); }
+.date { display: block; font-size: 12px; line-height: 1.6; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
 .sub { display: block; margin-top: 3px; font-size: 11px; color: var(--cp-color-text-secondary); line-height: 1.6; overflow-wrap: anywhere; }
 .message { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 10px 12px; background: var(--cp-color-fill-quaternary); border-radius: 4px; font-size: 12px; overflow-wrap: anywhere; }
 .message > svg { flex-shrink: 0; }
 .message > div { min-width: 0; flex: 1; }
 .message button { margin-left: auto; }
-.scan-time { font-size: 11px; color: var(--cp-color-text-quaternary); padding-top: 4px; }
+.snapshot-time { text-align: end; font-size: 12px; color: var(--cp-color-text-secondary); padding-top: 4px; }
 .extra, .failure-list, .history { font-size: 11px; line-height: 1.6; color: var(--cp-color-text-secondary); margin-top: 10px; }
 .extra span { display: block; white-space: normal; overflow-wrap: anywhere; }
 .failure-list { margin-bottom: 12px; }.failure-list p { margin: 6px 0; overflow-wrap: anywhere; }

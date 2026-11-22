@@ -1,95 +1,10 @@
-//! 额度恢复判断、重置卡与订阅快照的持久化数据
+//! 旧版未决用卡状态和额度恢复判断
 
-use gateway_plugin_sdk::call::data::{QuotaFacts, QuotaWindowFacts};
+use gateway_plugin_sdk::call::data::QuotaDetails;
 use serde::{Deserialize, Serialize};
 
 pub fn is_free(plan_type: Option<&str>) -> bool {
     plan_type.is_some_and(|plan| plan.trim().eq_ignore_ascii_case("free"))
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Settings {
-    pub check_interval_seconds: u64,
-    pub cards_refresh_seconds: u64,
-    pub batch_size: u16,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            check_interval_seconds: 30,
-            cards_refresh_seconds: 3600,
-            batch_size: 20,
-        }
-    }
-}
-
-impl Settings {
-    pub fn valid(&self) -> bool {
-        (30..=3600).contains(&self.check_interval_seconds)
-            && (300..=86400).contains(&self.cards_refresh_seconds)
-            && (1..=20).contains(&self.batch_size)
-    }
-}
-
-#[derive(Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Cards {
-    pub available_count: u64,
-    pub credits: Vec<Card>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Card {
-    pub id: String,
-    pub status: Option<String>,
-    pub title: Option<String>,
-    pub expires_at: Option<String>,
-    pub expires_at_display: Option<String>,
-    pub reset_type: Option<String>,
-}
-
-impl Card {
-    pub fn expiry_ms(&self) -> Option<i64> {
-        self.expires_at
-            .as_ref()
-            .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
-            .map(|v| v.timestamp_millis())
-    }
-
-    pub fn available(&self, now: i64) -> bool {
-        self.status
-            .as_deref()
-            .is_some_and(|v| v.eq_ignore_ascii_case("available"))
-            && self
-                .expires_at
-                .as_ref()
-                .is_none_or(|_| self.expiry_ms().is_some_and(|v| v > now))
-    }
-}
-
-pub fn weekly_windows(quota: &QuotaFacts) -> Vec<&QuotaWindowFacts> {
-    quota
-        .windows
-        .iter()
-        .filter(|v| v.window_seconds == Some(604800))
-        .collect()
-}
-
-pub fn account_weekly(quota: &QuotaFacts) -> Option<&QuotaWindowFacts> {
-    let mut windows = weekly_windows(quota).into_iter().filter(|v| {
-        v.key
-            .split(':')
-            .next()
-            .is_some_and(|s| s.eq_ignore_ascii_case("codex"))
-    });
-    let first = windows.next()?;
-    if windows.next().is_some() {
-        return None;
-    }
-    Some(first)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -111,22 +26,9 @@ pub struct Event {
     pub code: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Subscription {
-    pub starts_at: Option<String>,
-    pub expires_at: String,
-    pub observed_at: String,
-}
-
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountState {
-    pub subscription: Option<Subscription>,
-    pub subscription_checked_at_ms: Option<i64>,
-    pub cards: Option<Cards>,
-    pub cards_observed_at_ms: Option<i64>,
-    pub cards_checked_at_ms: Option<i64>,
     pub error: Option<String>,
     pub pending: Option<Pending>,
     pub awaiting_recovery: bool,
@@ -135,40 +37,61 @@ pub struct AccountState {
 }
 
 impl AccountState {
-    pub fn note_recovery(&mut self, quota: &QuotaFacts) {
-        if self.awaiting_recovery
-            && quota
-                .observed_at_ms
-                .is_some_and(|t| self.last_attempt_at_ms.is_some_and(|last| t > last))
-            && account_weekly(quota).is_some_and(|w| w.used_percent.is_some_and(|v| v < 100.0))
-        {
-            self.awaiting_recovery = false;
+    pub fn clear_legacy_query_error(&mut self) {
+        if self.error.as_deref() == Some("重置卡查询失败，保留上次快照") {
+            self.error = None;
         }
     }
-}
 
-#[derive(Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Scan {
-    pub cursor: Option<String>,
-    pub next_at_ms: i64,
-    pub checked_at_ms: Option<i64>,
+    pub fn note_recovery(&mut self, quota: &QuotaDetails) -> bool {
+        if !self.awaiting_recovery
+            || !matches!((quota.observed_at_ms, self.last_attempt_at_ms), (Some(observed), Some(last)) if observed > last)
+        {
+            return false;
+        }
+        let mut weekly = quota.windows.iter().filter(|window| {
+            window.window_seconds == Some(604800)
+                && window
+                    .key
+                    .split(':')
+                    .next()
+                    .is_some_and(|key| key.eq_ignore_ascii_case("codex"))
+        });
+        if weekly
+            .next()
+            .is_some_and(|window| window.used_percent.is_some_and(|used| used < 100.0))
+            && weekly.next().is_none()
+        {
+            self.awaiting_recovery = false;
+            return true;
+        }
+        false
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gateway_plugin_sdk::call::data::QuotaWindowDetails;
 
-    fn quota(key: &str, seconds: u64, used: f64, observed: i64, reset: i64) -> QuotaFacts {
-        QuotaFacts {
+    fn quota(used: f64, observed: i64) -> QuotaDetails {
+        QuotaDetails {
             schema_version: 1,
             account_id: "a".into(),
             observed_at_ms: Some(observed),
-            windows: vec![QuotaWindowFacts {
-                key: key.into(),
-                window_seconds: Some(seconds),
+            limit_reached: false,
+            credits: None,
+            windows: vec![QuotaWindowDetails {
+                key: "codex:604800s".into(),
+                group: "codex".into(),
+                label: "周限".into(),
+                limit_id: None,
+                limit_name: None,
+                role: None,
+                window_seconds: Some(604800),
                 used_percent: Some(used),
-                reset_at_ms: Some(reset),
+                reset_at_ms: Some(99999),
+                limit_reached: false,
             }],
         }
     }
@@ -180,9 +103,11 @@ mod tests {
             last_attempt_at_ms: Some(1000),
             ..Default::default()
         };
-        state.note_recovery(&quota("codex:604800s", 604800, 0.0, 999, 99999));
+        assert!(!state.note_recovery(&quota(0.0, 999)));
         assert!(state.awaiting_recovery);
-        state.note_recovery(&quota("codex:604800s", 604800, 0.0, 1001, 99999));
+        assert!(!state.note_recovery(&quota(100.0, 1001)));
+        assert!(state.awaiting_recovery);
+        assert!(state.note_recovery(&quota(0.0, 1001)));
         assert!(!state.awaiting_recovery);
     }
 }

@@ -1,4 +1,4 @@
-import type { Card, ResetCardAutomation, ResetCardSettings, Row } from './types'
+import type { ResetCardAutomation, ResetCardSettings, Row } from './types'
 
 export function time(value: string | number | null | undefined): string {
   if (value == null) return '未知'
@@ -30,14 +30,12 @@ export function automationResult(automation: ResetCardAutomation | null): string
     default: return ''
   }
 }
-export const available = (card: Card, now = Date.now()) => card.status === 'available' && (!card.expiresAt || new Date(card.expiresAt).getTime() > now)
-export const selectable = (row: Row) => row.state.cards?.credits.filter(c => available(c)).sort((a, b) => (a.expiresAt ? new Date(a.expiresAt).getTime() : Infinity) - (b.expiresAt ? new Date(b.expiresAt).getTime() : Infinity)) ?? []
 export function status(row: Row): string {
   if (row.state.pending) return '结果待确认'
   if (!row.account.enabled) return '已停用'
-  if (row.state.awaitingRecovery) return '等待额度回读'
+  if (row.state.awaitingRecovery) return '等待额度观测'
   if (isLimited(row)) return '周限已满'
-  if (row.state.error) return '检查异常'
+  if (row.state.error) return '重置异常'
   if (!week(row)) return '无周限数据'
   return '正常'
 }
@@ -46,7 +44,9 @@ export function visualIndex(text: string, size: number) { return Array.from(text
 export function avatarTone(id: string) { return ['blue', 'green', 'orange', 'cyan'][visualIndex(id, 4)] }
 export function csv(rows: Row[]): string {
   const cell = (value: unknown) => { let s = String(value ?? ''); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return `"${s.replaceAll('"', '""')}"` }
-  const data = [['账号ID', '完整名称', '邮箱', '启用', '订阅', '订阅开始', '订阅结束', '周限已用%', '周限刷新时间', '周限观测时间', '卡张数', '卡到期时间', '卡观测时间', '额度点数', '自动使用额度点数', '自动使用重置卡', '状态'],
-    ...rows.map(r => [r.account.account_id, r.account.name, r.account.email, r.account.enabled, r.account.plan_type_display, r.state.subscription?.startsAt, r.state.subscription?.expiresAt, week(r)?.used_percent, time(week(r)?.reset_at_ms), time(r.quota?.observed_at_ms), r.state.cards?.availableCount, selectable(r).map(c => `${c.id}: ${time(c.expiresAt)}`).join(' | '), time(r.state.cardsObservedAtMs), creditBalance(r), r.autoUseQuotaCredits, r.resetCardAutomation?.enabled, status(r)])]
+  const data = [['账号ID', '完整名称', '邮箱', '启用', '订阅', '周限已用%', '周限刷新时间', '周限观测时间', '额度点数', '自动使用额度点数', '自动使用重置卡', '状态'],
+    ...rows.map(r => [r.account.account_id, r.account.name, r.account.email, r.account.enabled, r.account.plan_type_display,
+      week(r)?.used_percent, time(week(r)?.reset_at_ms), time(r.quota?.observed_at_ms),
+      creditBalance(r), r.autoUseQuotaCredits, r.resetCardAutomation?.enabled, status(r)])]
   return '\uFEFF' + data.map(r => r.map(cell).join(',')).join('\r\n')
 }

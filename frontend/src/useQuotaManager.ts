@@ -1,7 +1,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from './api'
-import { canReset, isFree, isLimited, planKey, selectable, status, week } from './format'
-import type { Card, PageStatus, Pending, Row } from './types'
+import { isFree, isLimited, planKey, week } from './format'
+import type { PageStatus, Pending, Row } from './types'
 
 export type Policy = 'quotaCredits' | 'resetCards'
 const message = (error: unknown) => error instanceof Error ? error.message : '操作失败'
@@ -11,14 +11,12 @@ export function useQuotaManager() {
   const rows = ref<Row[]>([]), excludedPending = ref<Row[]>([])
   const loading = ref(false), refreshing = ref(false), busy = ref(''), error = ref(''), notice = ref('')
   const search = ref(''), filter = ref('all'), membership = ref('all'), order = ref('name'), page = ref(1), pageSize = ref(10)
-  const pageStatus = ref<PageStatus>({ scan: { checkedAtMs: null }, resetCardSettings: null })
-  const showCards = ref(false), selectedId = ref(''), consuming = ref(false), cardsLoading = ref(false), cardsError = ref('')
-  const confirmation = ref<{ card: Card | null; pending: Pending | null } | null>(null)
+  const pageStatus = ref<PageStatus>({ resetCardSettings: null }), snapshotAt = ref<number | null>(null)
+  const showCards = ref(false), selectedId = ref(''), consuming = ref(false)
+  const confirmation = ref<Pending | null>(null)
   const bulk = ref(false), stopBulk = ref(false), bulkDone = ref(0), bulkTotal = ref(0), failures = ref<string[]>([])
   const selected = computed(() => [...rows.value, ...excludedPending.value].find(row => row.account.account_id === selectedId.value))
-  const blocked = computed(() => !!busy.value || bulk.value || consuming.value || cardsLoading.value)
-  const known = computed(() => rows.value.filter(row => row.state.cards !== null).length)
-  const totalCards = computed(() => rows.value.reduce((sum, row) => sum + (row.state.cards?.availableCount ?? 0), 0))
+  const blocked = computed(() => !!busy.value || bulk.value || consuming.value)
   const limited = computed(() => rows.value.filter(isLimited).length)
   const pending = computed(() => rows.value.filter(row => row.state.pending).length + excludedPending.value.length)
   const automaticCount = computed(() => rows.value.filter(row => row.resetCardAutomation?.enabled).length)
@@ -34,12 +32,11 @@ export function useQuotaManager() {
     const query = search.value.trim().toLowerCase()
     return rows.value.filter(row => `${row.account.name} ${row.account.account_id} ${row.account.email ?? ''}`.toLowerCase().includes(query)
       && (membership.value === 'all' || planKey(row) === membership.value)
-      && (filter.value === 'all' || (filter.value === 'limited' && isLimited(row)) || (filter.value === 'cards' && (row.state.cards?.availableCount ?? 0) > 0)
-        || (filter.value === 'pending' && !!row.state.pending) || (filter.value === 'unknown' && !row.state.cards) || (filter.value === 'error' && !!row.state.error)
+      && (filter.value === 'all' || (filter.value === 'limited' && isLimited(row))
+        || (filter.value === 'pending' && !!row.state.pending) || (filter.value === 'error' && !!row.state.error)
         || (filter.value === 'disabled' && !row.account.enabled) || (filter.value === 'automatic' && row.resetCardAutomation?.enabled === true)))
       .sort((a, b) => order.value === 'used' ? (week(b)?.used_percent ?? -1) - (week(a)?.used_percent ?? -1)
-        : order.value === 'expiry' ? (Date.parse(selectable(a)[0]?.expiresAt || '') || Infinity) - (Date.parse(selectable(b)[0]?.expiresAt || '') || Infinity)
-          : a.account.name.localeCompare(b.account.name))
+        : a.account.name.localeCompare(b.account.name))
   })
   const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize.value)))
   const visible = computed(() => filtered.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
@@ -47,15 +44,13 @@ export function useQuotaManager() {
     quotaCredits: filtered.value.filter(row => canSetPolicy(row, 'quotaCredits')),
     resetCards: filtered.value.filter(row => canSetPolicy(row, 'resetCards')),
   }))
-  const cardOptions = computed(() => selected.value ? selectable(selected.value) : [])
-  const countOnly = computed(() => !!selected.value?.state.cards && selected.value.state.cards.availableCount > 0 && selected.value.state.cards.credits.length === 0)
   const filteredActive = computed(() => !!search.value || filter.value !== 'all' || membership.value !== 'all')
   let mutation = 0, stopped = false
 
   function clearFilters() { search.value = ''; filter.value = 'all'; membership.value = 'all' }
-  function applyRow(row: Row, result: { state: Row['state']; quota?: Row['quota'] }) {
+  function applyRow(row: Row, result: Pick<Row, 'state' | 'quota'>) {
     row.state = result.state
-    if ('quota' in result) row.quota = result.quota ?? null
+    row.quota = result.quota
   }
   async function load(silent = false) {
     if (loading.value || refreshing.value || blocked.value || showCards.value) return
@@ -64,9 +59,10 @@ export function useQuotaManager() {
     const started = mutation
     try {
       const found = new Map<string, Row>(), excluded = new Map<string, Row>()
-      let next = 1
+      let next = 1, loadedAt: number | null = null
       while (!stopped) {
         const result = await api.accounts(next)
+        loadedAt = result.generatedAtMs
         for (const row of result.accounts) if (!isFree(row)) found.set(row.account.account_id, row)
         for (const row of result.excludedPending) excluded.set(row.account.account_id, row)
         if (result.nextPage === null) break
@@ -79,37 +75,10 @@ export function useQuotaManager() {
         rows.value = [...found.values()]
         excludedPending.value = [...excluded.values()]
         pageStatus.value = current
+        snapshotAt.value = loadedAt
       }
     } catch (cause) { error.value = message(cause) }
     finally { loading.value = false; refreshing.value = false }
-  }
-  async function refresh(row: Row, report = true): Promise<boolean> {
-    mutation++; busy.value = row.account.account_id
-    if (report) { error.value = ''; notice.value = '' }
-    try {
-      applyRow(row, await api.refresh(row.account.account_id))
-      if (report) notice.value = '已更新账号快照'
-      return true
-    } catch (cause) {
-      if (report) error.value = message(cause)
-      else failures.value.push(`${row.account.name}：${message(cause)}`)
-      return false
-    } finally { busy.value = '' }
-  }
-  async function refreshAll() {
-    if (blocked.value) return
-    bulk.value = true; stopBulk.value = false; error.value = ''; notice.value = ''; failures.value = []; bulkDone.value = 0
-    const targets = filtered.value.filter(canReset)
-    bulkTotal.value = targets.length
-    try {
-      for (const row of targets) {
-        if (stopBulk.value || stopped) break
-        await refresh(row, false)
-        bulkDone.value++
-        if (bulkDone.value < targets.length) await new Promise(resolve => setTimeout(resolve, 1000))
-      }
-      notice.value = `已更新 ${bulkDone.value}/${bulkTotal.value} 个账号${failures.value.length ? `，失败 ${failures.value.length} 个` : ''}`
-    } finally { bulk.value = false }
   }
   async function policy(row: Row, key: Policy, enabled: boolean) {
     if (blocked.value || !canSetPolicy(row, key)) return
@@ -144,32 +113,21 @@ export function useQuotaManager() {
   }
   function openCards(row: Row) {
     selectedId.value = row.account.account_id
-    error.value = ''; cardsError.value = ''
-    confirmation.value = null; showCards.value = true
-    if (canReset(row) && !row.state.pending) void refreshCardInventory()
-  }
-  async function refreshCardInventory() {
-    const row = selected.value
-    if (!row || blocked.value || !canReset(row)) return
-    mutation++; cardsLoading.value = true; cardsError.value = ''
-    try { row.state = await api.refreshCards(row.account.account_id) }
-    catch (cause) { cardsError.value = message(cause) }
-    finally { cardsLoading.value = false }
-  }
-  function requestConsume(card: Card | null) {
-    const row = selected.value
-    if (!row || blocked.value) return
-    const pending = row.state.pending
-    if (!pending && (cardsError.value || (card ? !cardOptions.value.some(item => item.id === card.id) : !countOnly.value))) return
     error.value = ''
-    confirmation.value = { card, pending }
+    confirmation.value = null; showCards.value = true
   }
-  async function consume() {
+  function requestConfirmation() {
+    const pending = selected.value?.state.pending
+    if (!pending || blocked.value) return
+    error.value = ''
+    confirmation.value = pending
+  }
+  async function confirmPending() {
     const row = selected.value, operation = confirmation.value
     if (!row || !operation || blocked.value) return
     mutation++; consuming.value = true; error.value = ''; notice.value = ''
     try {
-      applyRow(row, operation.pending ? await api.retry(row.account.account_id, operation.pending.requestId) : await api.consume(row.account.account_id, operation.card?.id ?? null))
+      applyRow(row, await api.retry(row.account.account_id, operation.requestId))
       if (row.state.pending) notice.value = '结果待确认，请确认原操作'
       else {
         notice.value = row.state.error ?? '重置已完成'
@@ -178,7 +136,7 @@ export function useQuotaManager() {
       }
     } catch (cause) {
       error.value = message(cause)
-      // 不确定时先回读原操作，避免下一次点击成为新消费
+      // 请求中断时回读宿主已保存的原操作结果
       try {
         let next = 1
         while (!stopped) {
@@ -196,7 +154,7 @@ export function useQuotaManager() {
   watch(pages, count => { page.value = Math.min(page.value, count) })
   onMounted(() => { void load() })
   onUnmounted(() => { stopped = true; stopBulk.value = true })
-  return { rows, loading, refreshing, busy, error, notice, excludedPending, search, filter, membership, order, page, pageSize, pageStatus, policyTargets,
-    showCards, confirmation, consuming, cardsLoading, cardsError, bulk, stopBulk, bulkDone, bulkTotal, failures, selected, blocked, known, totalCards, limited, pending, automaticCount,
-    planOptions, filtered, visible, cardOptions, countOnly, filteredActive, clearFilters, load, refresh, refreshAll, policy, setFilteredPolicy, openCards, refreshCardInventory, requestConsume, consume }
+  return { rows, loading, refreshing, error, notice, excludedPending, search, filter, membership, order, page, pageSize, pageStatus, snapshotAt, policyTargets,
+    showCards, confirmation, consuming, bulk, stopBulk, bulkDone, bulkTotal, failures, selected, blocked, limited, pending, automaticCount,
+    planOptions, filtered, visible, filteredActive, clearFilters, load, policy, setFilteredPolicy, openCards, requestConfirmation, confirmPending }
 }

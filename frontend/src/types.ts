@@ -1,17 +1,13 @@
 export interface ResetCardSettings { resetCreditOnLowWeeklyQuota: boolean; resetCreditLeadMinutes: number; resetCreditMaxWeeklyRemainingPercent: number | null }
-export interface ResetCardAutomation { enabled: boolean; next_consume_at: string | null; last_result: string | null }
-export interface PageStatus { scan: { checkedAtMs: number | null }; resetCardSettings: ResetCardSettings | null }
-export interface Card { id: string; status: string | null; title: string | null; expiresAt: string | null; expiresAtDisplay: string | null; resetType: string | null }
+export interface ResetCardAutomation { enabled: boolean; next_discovery_at: string | null; next_consume_at: string | null; last_result: string | null }
+export interface PageStatus { resetCardSettings: ResetCardSettings | null }
 export interface QuotaWindow { key: string; label: string; limit_id: string | null; window_seconds: number | null; used_percent: number | null; reset_at_ms: number | null }
 export interface QuotaCredits { has_credits: boolean; unlimited: boolean; balance: string | null }
-export interface Subscription { startsAt: string | null; expiresAt: string; observedAt: string }
 export interface Quota { account_id: string; observed_at_ms: number | null; windows: QuotaWindow[]; credits: QuotaCredits | null }
 export interface Pending { requestId: string; creditId: string | null; startedAtMs: number; automatic: boolean }
 export interface Event { atMs: number; requestId: string; creditId: string | null; automatic: boolean; code: string }
 export interface State {
-  subscription: Subscription | null; subscriptionCheckedAtMs: number | null;
-  cards: { availableCount: number; credits: Card[] } | null;
-  cardsObservedAtMs: number | null; cardsCheckedAtMs: number | null; error: string | null;
+  error: string | null;
   pending: Pending | null; awaitingRecovery: boolean; lastAttemptAtMs: number | null; history: Event[];
 }
 export interface Row {
