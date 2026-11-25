@@ -20,6 +20,16 @@ export function installPreview() {
   }))
   rows[2]!.state.pending = { requestId: 'c85eac15-2fde-4d55-92bd-f328f272f40b', creditId: 'card_2_0', startedAtMs: stamp - 20000, automatic: false }
   rows[2]!.state.error = '消费结果待确认，请确认原操作'
+  rows.push({
+    account: { account_id: 'acct_preview_antigravity', provider_id: 'antigravity', name: 'Antigravity 模拟账号', email: 'antigravity@example.com', enabled: true, authentication_kind: 'oauth', plan_type: 'g1-pro-tier', plan_type_display: 'Google AI Pro' },
+    autoUseQuotaCredits: null,
+    resetCardAutomation: null,
+    quota: { account_id: 'acct_preview_antigravity', observed_at_ms: stamp - 40000, credits: null, windows: [
+      { key: 'gemini-weekly', label: '周额度', limit_id: 'gemini', limit_name: 'Gemini', window_seconds: 604800, used_percent: 45, reset_at_ms: stamp + 86400000 },
+      { key: 'claude-weekly', label: '周额度', limit_id: 'claude', limit_name: 'Claude', window_seconds: 604800, used_percent: 100, reset_at_ms: stamp + 172800000 },
+    ] },
+    state: state(),
+  })
   const resetCardSettings: ResetCardSettings = { resetCreditOnLowWeeklyQuota: false, resetCreditLeadMinutes: 15, resetCreditMaxWeeklyRemainingPercent: 20 }
   const encode = (body: unknown, status = 200) => ({ status, contentType: 'application/json', body: new TextEncoder().encode(JSON.stringify(body)).buffer as ArrayBuffer })
   window.codexProxyPlugin = {

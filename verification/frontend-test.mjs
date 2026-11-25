@@ -9,7 +9,7 @@ try {
   const { request } = await server.ssrLoadModule('/src/api/request.ts')
   const { api } = await server.ssrLoadModule('/src/api/index.ts')
   const { parsePage, parseStatus, parseUpdate } = await server.ssrLoadModule('/src/api/schemas/quota.ts')
-  const { creditBalance, csv, isFree, resetCardTiming } = await server.ssrLoadModule('/src/format.ts')
+  const { creditBalance, csv, hasGroupedQuota, isFree, isLimited, resetCardTiming, status: quotaStatus, week } = await server.ssrLoadModule('/src/format.ts')
   globalThis.window = {}
   await assert.rejects(api.status(), /宿主桥不可用/)
   check('Missing host bridge fails without network fallback')
@@ -55,6 +55,23 @@ try {
   assert.equal(creditBalance({ ...row, quota: { ...row.quota, credits: { ...credits, balance: null } } }), '—')
   assert.equal(creditBalance({ ...row, quota: { ...row.quota, credits: { ...credits, unlimited: true } } }), '不限')
   check('Snapshot refresh reads the host page and preserves native switches and credit balance semantics')
+  const grouped = {
+    ...row,
+    account: { ...row.account, provider_id: 'antigravity', enabled: true, plan_type: 'g1-pro-tier', plan_type_display: 'Google AI Pro' },
+    quota: { ...row.quota, credits: null, windows: [
+      { key: 'gemini-weekly', label: '周额度', limit_id: 'gemini', limit_name: 'Gemini', window_seconds: 604800, used_percent: 45, reset_at_ms: stamp + 86400000 },
+      { key: 'claude-weekly', label: '周额度', limit_id: 'claude', limit_name: 'Claude', window_seconds: 604800, used_percent: 100, reset_at_ms: stamp + 172800000 },
+    ] },
+    autoUseQuotaCredits: null,
+  }
+  const groupedRow = parsePage({ ...page, accounts: [grouped] }).accounts[0]
+  assert.deepEqual(groupedRow, grouped)
+  assert.ok(hasGroupedQuota(groupedRow) && isLimited(groupedRow))
+  assert.equal(quotaStatus(groupedRow), '分组周限已满')
+  assert.equal(week(groupedRow).limit_name, 'Claude')
+  groupedRow.quota.windows[1].reset_at_ms = stamp - 1
+  assert.equal(quotaStatus(groupedRow), '正常')
+  check('Antigravity weekly snapshots retain per-group names and reset times, and ignore expired windows when checking exhaustion')
   response = reply({ enabled: true })
   assert.equal(await api.setQuotaCredits('acct-1', true), true)
   assert.equal(calls.at(-1).path, 'api/auto-use-quota-credits')

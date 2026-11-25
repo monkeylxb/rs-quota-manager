@@ -14,7 +14,7 @@ import PlanBadge from './PlanBadge.vue'
 import ExportDialog from './ExportDialog.vue'
 import ResetCardsDialog from './ResetCardsDialog.vue'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { avatarTone, canReset, csv, creditBalance, isLimited, resetCardTiming, status, time, week, weeks } from './format'
+import { avatarTone, canReset, csv, creditBalance, hasGroupedQuota, isLimited, resetCardTiming, status, time, week, weeks } from './format'
 import { useQuotaManager, type Policy } from './useQuotaManager'
 import type { Row } from './types'
 
@@ -98,8 +98,25 @@ const statusTone = (row: Row) => row.state.pending || isLimited(row) ? 'warning'
         <template #identity="{ row }"><div class="account-cell"><span class="account-avatar" :class="`tone-${avatarTone(row.account.account_id)}`">{{ accountEmail(row).slice(0, 1).toUpperCase() }}</span><span class="account-name" :title="rowTitle(row)">{{ accountEmail(row) }}</span></div></template>
         <template #plan="{ row }"><PlanBadge :plan="row.account.plan_type" :display-name="row.account.plan_type_display" /></template>
         <template #status="{ row }"><span class="account-status" :class="`status-${statusTone(row)}`" :title="row.state.error || status(row)"><i></i>{{ status(row) }}</span></template>
-        <template #weekly="{ row }"><div v-if="week(row)" class="weekly-cell" :title="`额度观测 ${time(row.quota?.observed_at_ms)}`"><div class="quota-value" :class="{ warning: isLimited(row) }">{{ week(row)?.used_percent == null ? '未知' : `${week(row)!.used_percent!.toFixed(1)}%` }}<span>已用</span></div><div class="quota-track"><i :class="{ exhausted: isLimited(row) }" :style="{ width: `${Math.min(100, Math.max(0, week(row)?.used_percent || 0))}%` }"></i></div><details v-if="weeks(row).length > 1" class="extra"><summary>其他周限</summary><span v-for="window in weeks(row)" :key="window.key">{{ window.key }} · {{ window.used_percent ?? '未知' }}%</span></details></div><span v-else class="muted">无周限数据</span></template>
-        <template #reset="{ row }"><span class="date" :title="`额度观测 ${time(row.quota?.observed_at_ms)}`">{{ time(week(row)?.reset_at_ms) }}</span></template>
+        <template #weekly="{ row }">
+          <ZPopover v-if="hasGroupedQuota(row) && weeks(row).length" placement="bottom-start">
+            <template #reference><ZButton size="small" variant="link">{{ weeks(row).length }} 个模型组</ZButton></template>
+            <div class="settings-help model-group-quota">
+              <p v-for="window in weeks(row)" :key="window.key">
+                <strong>{{ window.limit_name || window.limit_id || window.key }}</strong>
+                <span>已用 {{ window.used_percent == null ? '未知' : `${window.used_percent.toFixed(1)}%` }}</span>
+                <span>刷新 {{ time(window.reset_at_ms) }}</span>
+              </p>
+              <p class="sub">额度观测 {{ time(row.quota?.observed_at_ms) }}</p>
+            </div>
+          </ZPopover>
+          <div v-else-if="week(row)" class="weekly-cell" :title="`额度观测 ${time(row.quota?.observed_at_ms)}`"><div class="quota-value" :class="{ warning: isLimited(row) }">{{ week(row)?.used_percent == null ? '未知' : `${week(row)!.used_percent!.toFixed(1)}%` }}<span>已用</span></div><div class="quota-track"><i :class="{ exhausted: isLimited(row) }" :style="{ width: `${Math.min(100, Math.max(0, week(row)?.used_percent || 0))}%` }"></i></div><details v-if="weeks(row).length > 1" class="extra"><summary>其他周限</summary><span v-for="window in weeks(row)" :key="window.key">{{ window.key }} · {{ window.used_percent ?? '未知' }}%</span></details></div>
+          <span v-else class="muted">无周限数据</span>
+        </template>
+        <template #reset="{ row }">
+          <span v-if="hasGroupedQuota(row)" class="muted">{{ weeks(row).length ? '见模型组' : '—' }}</span>
+          <span v-else class="date" :title="`额度观测 ${time(row.quota?.observed_at_ms)}`">{{ time(week(row)?.reset_at_ms) }}</span>
+        </template>
         <template #plannedReset="{ row }"><span class="date">{{ row.resetCardAutomation?.next_consume_at ? time(row.resetCardAutomation.next_consume_at) : '—' }}</span></template>
         <template #quotaCredits="{ row }"><span class="date">{{ creditBalance(row) }}</span></template>
         <template #header-autoUseQuotaCredits><span class="policy-label">自动使用<wbr>额度点数</span></template>

@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "quota-manager"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "gateway-plugin-sdk",
  "serde",

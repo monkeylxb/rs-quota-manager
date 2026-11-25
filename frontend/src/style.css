@@ -24,6 +24,8 @@ body { margin: 0; min-width: 0; min-height: inherit; font-size: var(--cp-font-si
 .toolbar-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .settings-help { padding: 10px 14px; max-width: 320px; font-size: 12px; line-height: 1.7; }
 .settings-help p { margin: 4px 0; }
+.model-group-quota p + p { margin-top: 8px; }
+.model-group-quota span { display: block; }
 .account-cell { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .account-avatar { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: 8px; font-weight: 750; font-size: 14px; }
 .account-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; font-size: 13px; line-height: 1.7; }

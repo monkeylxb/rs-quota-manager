@@ -38,7 +38,8 @@ function parseQuota(input: unknown): Quota {
   const v = record(input, '额度')
   return { account_id: string(v.account_id, '额度账号'), credits: nullable(v.credits, parseQuotaCredits, '额度点数'), observed_at_ms: nullable(v.observed_at_ms, integer, '额度观测时间'), windows: array(v.windows, input => {
     const w = record(input, '额度窗口')
-    return { key: string(w.key, '窗口标识'), label: string(w.label, '窗口名称'), limit_id: nullable(w.limit_id, string, '额度桶'), window_seconds: nullable(w.window_seconds, integer, '窗口时长'), used_percent: nullable(w.used_percent, number, '用量比例'), reset_at_ms: nullable(w.reset_at_ms, integer, '额度刷新时间') }
+    const groupName = nullable(w.limit_name ?? null, string, '额度组名称')
+    return { key: string(w.key, '窗口标识'), label: string(w.label, '窗口名称'), limit_id: nullable(w.limit_id, string, '额度桶'), ...(groupName ? { limit_name: groupName } : {}), window_seconds: nullable(w.window_seconds, integer, '窗口时长'), used_percent: nullable(w.used_percent, number, '用量比例'), reset_at_ms: nullable(w.reset_at_ms, integer, '额度刷新时间') }
   }, '额度窗口') }
 }
 function parseRow(input: unknown): Row {

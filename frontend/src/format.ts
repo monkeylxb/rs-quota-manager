@@ -1,4 +1,4 @@
-import type { ResetCardAutomation, ResetCardSettings, Row } from './types'
+import type { QuotaWindow, ResetCardAutomation, ResetCardSettings, Row } from './types'
 
 export function time(value: string | number | null | undefined): string {
   if (value == null) return '未知'
@@ -9,8 +9,20 @@ export const weeks = (row: Row) => row.quota?.windows.filter(w => w.window_secon
 export const isFree = (row: Row) => row.account.plan_type?.trim().toLowerCase() === 'free'
 export const planKey = (row: Row) => row.account.plan_type?.trim().toLowerCase() || 'unknown'
 export const canReset = (row: Row) => row.account.provider_id === 'openai' && row.account.authentication_kind === 'oauth' && !isFree(row)
-export const week = (row: Row) => weeks(row).find(w => w.key.split(':')[0]?.toLowerCase() === 'codex') ?? weeks(row)[0]
-export const isLimited = (row: Row) => (week(row)?.used_percent ?? -1) >= 100 && (week(row)?.reset_at_ms ?? 0) > Date.now()
+export const hasGroupedQuota = (row: Row) => row.account.provider_id === 'antigravity'
+export function week(row: Row) {
+  const windows = weeks(row)
+  if (hasGroupedQuota(row)) return windows.sort((a, b) => (b.used_percent ?? -1) - (a.used_percent ?? -1))[0]
+  return windows.find(w => w.key.split(':')[0]?.toLowerCase() === 'codex') ?? windows[0]
+}
+const isWindowLimited = (window: QuotaWindow | undefined, now: number) =>
+  (window?.used_percent ?? -1) >= 100 && (window?.reset_at_ms ?? 0) > now
+export function isLimited(row: Row) {
+  const now = Date.now()
+  return hasGroupedQuota(row)
+    ? weeks(row).some(window => isWindowLimited(window, now))
+    : isWindowLimited(week(row), now)
+}
 export const creditBalance = (row: Row) => row.quota?.credits?.unlimited ? '不限' : row.quota?.credits?.balance ?? '—'
 export function resetCardTiming(settings: ResetCardSettings | null | undefined): string {
   if (!settings) return '未能读取系统设置'
@@ -34,7 +46,7 @@ export function status(row: Row): string {
   if (row.state.pending) return '结果待确认'
   if (!row.account.enabled) return '已停用'
   if (row.state.awaitingRecovery) return '等待额度观测'
-  if (isLimited(row)) return '周限已满'
+  if (isLimited(row)) return hasGroupedQuota(row) ? '分组周限已满' : '周限已满'
   if (row.state.error) return '重置异常'
   if (!week(row)) return '无周限数据'
   return '正常'

@@ -1,7 +1,7 @@
 export interface ResetCardSettings { resetCreditOnLowWeeklyQuota: boolean; resetCreditLeadMinutes: number; resetCreditMaxWeeklyRemainingPercent: number | null }
 export interface ResetCardAutomation { enabled: boolean; next_discovery_at: string | null; next_consume_at: string | null; last_result: string | null }
 export interface PageStatus { resetCardSettings: ResetCardSettings | null }
-export interface QuotaWindow { key: string; label: string; limit_id: string | null; window_seconds: number | null; used_percent: number | null; reset_at_ms: number | null }
+export interface QuotaWindow { key: string; label: string; limit_id: string | null; limit_name?: string; window_seconds: number | null; used_percent: number | null; reset_at_ms: number | null }
 export interface QuotaCredits { has_credits: boolean; unlimited: boolean; balance: string | null }
 export interface Quota { account_id: string; observed_at_ms: number | null; windows: QuotaWindow[]; credits: QuotaCredits | null }
 export interface Pending { requestId: string; creditId: string | null; startedAtMs: number; automatic: boolean }
