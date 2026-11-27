@@ -12,6 +12,7 @@ const stamp = Date.now()
 const account = (id, enabled = true, plan = 'team') => ({ account_id: id, provider_id: 'openai', name: `team+${id}+2026/10/28+workspace3`, email: `${id}@example.com`, group_ids: [], enabled, updated_at_ms: stamp, plan })
 const accounts = [account('acct_001'), account('acct_002', false), account('acct_003'), account('acct_004'), account('acct_005'), account('acct_006', true, 'free'), account('acct_007', true, ' Free '), account('acct_008', true, 'plus')]
 accounts[7].name = 'free-prefix-but-paid-plus@example.com'
+const antigravity = { ...account('acct_google', true, 'g1-pro-tier'), provider_id: 'antigravity', name: 'Google OAuth', planDisplay: 'Google AI Pro' }
 const quota = (id, used = 25, key = 'codex:604800s', seconds = 604800) => ({ schema_version: 1, account_id: id, observed_at_ms: Date.now(), windows: [{ key, window_seconds: seconds, used_percent: used, reset_at_ms: stamp + 86400000 }] })
 const quotas = new Map(accounts.map(a => [a.account_id, quota(a.account_id)]))
 const balances = new Map([['acct_001', '0'], ['acct_002', '12.50']])
@@ -51,7 +52,7 @@ async function callback(meta, params, payload) {
     quotaFactReads.push(data.account_id)
     const q = structuredClone(quotas.get(data.account_id))
     q.limit_reached = false
-    q.windows = q.windows.map(window => ({ ...window, group: 'codex', label: '周限', limit_reached: false }))
+    q.windows = q.windows.map(window => ({ ...window, group: window.key.split(':')[0], label: '周限', limit_reached: false }))
     q.credits = { has_credits: true, unlimited: false, balance: balances.get(data.account_id) ?? null }
     return result(meta.id, {}, q)
   }
@@ -93,9 +94,13 @@ async function callback(meta, params, payload) {
       const offset = (Number(url.searchParams.get('page')) - 1) * 2
       const items = accounts.slice(offset, offset + 2).map(a => ({
         id: a.account_id, name: a.name, email: a.email, enabled: a.enabled, provider: a.provider_id,
-        authenticationKind: 'oauth', planType: a.plan, planTypeDisplay: a.plan === 'team' ? 'Team' : a.plan,
+        authenticationKind: 'oauth', planType: a.plan, planTypeDisplay: a.planDisplay ?? (a.plan === 'team' ? 'Team' : a.plan),
         autoUseQuotaCredits: useQuotaCredits.get(a.account_id) ?? false,
-        capabilities: { quotaCredits: a.account_id !== 'acct_008', resetCredits: a.account_id !== 'acct_008', consumeResetCredit: a.account_id !== 'acct_008' },
+        capabilities: {
+          quotaCredits: a.account_id !== 'acct_008',
+          resetCredits: a !== antigravity && a.account_id !== 'acct_008',
+          consumeResetCredit: a !== antigravity && a.account_id !== 'acct_008',
+        },
       }))
       envelope = { code: 200, data: { items, page: { totalPages: Math.ceil(accounts.length / 2) } } }
     } else if (url.pathname === '/api/admin/accounts/batch-update') {
@@ -261,6 +266,26 @@ try {
   assert.equal(useQuotaCredits.get('acct_002'), true)
   assert.equal(useResetCards.has('acct_002'), false)
   check('Both account switches still use the native host settings')
+
+  accounts.push(antigravity)
+  quotas.set(antigravity.account_id, quota(antigravity.account_id, 25, 'gemini:604800s'))
+  balances.set(antigravity.account_id, '125')
+  const readAntigravity = async () => (await request('api/accounts', undefined, 'page=5')).value.accounts[0]
+  const google = await readAntigravity()
+  assert.equal(google.account.provider_id, 'antigravity')
+  assert.equal(google.account.plan_type_display, 'Google AI Pro')
+  assert.equal(google.quota.credits.balance, '125')
+  assert.equal(google.autoUseQuotaCredits, false)
+  assert.equal(google.resetCardAutomation, null)
+  const writesBefore = policyWrites.length
+  const change = await request('api/auto-use-quota-credits', { accountId: antigravity.account_id, enabled: true })
+  assert.equal(change.status, 200)
+  assert.deepEqual(change.value, { enabled: true })
+  assert.deepEqual(policyWrites.slice(writesBefore), [{ id: antigravity.account_id, key: 'quotaCredits', enabled: true }])
+  assert.equal((await readAntigravity()).autoUseQuotaCredits, true)
+  assert.equal((await readAntigravity()).resetCardAutomation, null)
+  assert.equal(posts.length, 0)
+  check('Antigravity credits follow the host capability without exposing reset-card automation')
 
   const loaded = await request('api/status')
   assert.deepEqual(loaded.value, { resetCardSettings })

@@ -1,14 +1,14 @@
 # 周限与重置卡
 
-独立 RS 网关插件，插件 ID 为 `personal.quota-manager`，当前源码版本 `0.1.11`，公开版本以 Releases 为准
+独立 RS 网关插件，插件 ID 为 `personal.quota-manager`，当前源码版本 `0.1.12`，公开版本以 Releases 为准
 
-基于上游 `v3.54.0` 的公开 SDK，固定提交 `a770419818117098c43919a5c6553cc7023ecf71`。使用清单 v2、进程 RPC v7、管理能力 v2 和页面宿主桥 v2。
+基于上游 `v3.56.0` 的公开 SDK，固定提交 `a46d0f4c08bcf0f89aa004eb1d089e9e0039898c`。使用清单 v2、进程 RPC v7、管理能力 v2 和页面宿主桥 v2。
 
 ## 安装与兼容
 
 - 下载：[安装包与校验文件](https://github.com/monkeylxb/rs-quota-manager/releases)
-- 支持 RS 3.54.x 和 3.55.x，兼容范围为 `>=3.54.0, <3.56.0`。
-- Linux x86_64 安装包要求 glibc 2.28 及以上。
+- 支持 RS 3.54.x、3.55.x 和 3.56.x，兼容范围为 `>=3.54.0, <3.57.0`。
+- 提供 Linux x86_64、Linux ARM64（glibc 2.28+）和 macOS ARM64（Apple 芯片）安装包。
 - 插件 ID：`personal.quota-manager`。为保留既有安装配置和私有状态，继续沿用该身份。
 - 许可证：Apache-2.0，第三方来源见 [LICENSES/NOTICE.md](LICENSES/NOTICE.md)。
 
@@ -25,10 +25,17 @@ CSV 包含账号 ID、完整名称和邮箱，若原名称含敏感内容，请�
 
 ## 使用
 
-在网关的插件管理中上传安装 `dist/personal.quota-manager-0.1.11-x86_64-unknown-linux-gnu.tar.gz`，核对旁边的 SHA-256 文件，接受来源并确认配置处于启用状态，再打开“周限与重置卡”页面
+选择与运行 RS 的服务器匹配的安装包，核对同名的 `.sha256` 文件，再在插件管理中上传并启用
+
+| 宿主系统 | 安装包文件名后缀 |
+| --- | --- |
+| Linux x86_64 | `x86_64-unknown-linux-gnu.tar.gz` |
+| Linux ARM64 | `aarch64-unknown-linux-gnu.tar.gz` |
+| macOS ARM64（Apple 芯片） | `aarch64-apple-darwin.tar.gz` |
 
 - 打开页面或点击“读取最新快照”时分页读取 RS 账号、开关、已有额度观测和自动用卡计划。账号列优先显示完整邮箱，额度点数区分零、不限量和未知余额
 - RS 3.55 起可在 Antigravity 账号的「周限」列查看各模型组的已用比例和刷新时间。按周限排序或导出 CSV 时，使用该账号用量最高的组。
+- RS 3.56 起，宿主可为 Antigravity OAuth 账号提供 Google One 点数余额和原生自动用点开关。批量用点会包含筛选结果中支持该开关的 Antigravity 账号。
 - 按宿主 `planType` 排除 Free 账号，名称带 `team+` 的 Free 同样排除。降级为 Free 且仍有旧版未决操作的账号单独提供确认入口
 - 使用行内重置卡图标查看已有额度、宿主自动用卡计划和最近重置记录
 - “自动使用额度点数”和“自动使用重置卡”固定在列表右侧，分别对应 RS 账号管理中的同名设置。升级后直接读取宿主已有状态，旧插件的自动使用设置不会迁移到宿主
@@ -69,8 +76,9 @@ cargo +1.99.1 zigbuild --manifest-path backend/Cargo.toml --release --locked --t
 cpr-plugin package --manifest plugin.json --binary backend/target/x86_64-unknown-linux-gnu/release/quota-manager --target x86_64-unknown-linux-gnu --resource-map web=frontend/dist --resource-map legal=LICENSES --output-dir dist
 ```
 
-`cpr-plugin` 应从上面的宿主固定提交构建，安装包支持 Linux x86_64、glibc 2.28 及以上
-Linux 原生开发可直接使用 `cargo build --release --target x86_64-unknown-linux-gnu` 后用同一 CLI 打包
+`cpr-plugin` 应从上面的宿主固定提交构建。Linux ARM64 交叉构建使用 `aarch64-unknown-linux-gnu.2.28`，打包目标为 `aarch64-unknown-linux-gnu`。
+
+在 Apple 芯片 Mac 上使用 `cargo +1.99.1 build --manifest-path backend/Cargo.toml --release --locked --target aarch64-apple-darwin`，将打包目标和二进制路径中的目标改为 `aarch64-apple-darwin`。
 
 ## 上游复用
 
