@@ -1,13 +1,13 @@
 # 周限与重置卡
 
-独立 RS 网关插件，插件 ID 为 `personal.quota-manager`，当前源码版本 `0.1.12`，公开版本以 Releases 为准
+独立 RS 网关插件，插件 ID 为 `personal.quota-manager`，当前源码版本 `0.1.13`，公开版本以 Releases 为准
 
-基于上游 `v3.56.0` 的公开 SDK，固定提交 `a46d0f4c08bcf0f89aa004eb1d089e9e0039898c`。使用清单 v2、进程 RPC v7、管理能力 v2 和页面宿主桥 v2。
+基于上游 `v3.57.0` 的公开 SDK，固定提交 `6950c02ee460143dd63103a35a5dd679712488dc`。使用清单 v2、进程 RPC v7、管理能力 v2 和页面宿主桥 v2。
 
 ## 安装与兼容
 
 - 下载：[安装包与校验文件](https://github.com/monkeylxb/rs-quota-manager/releases)
-- 支持 RS 3.54.x、3.55.x 和 3.56.x，兼容范围为 `>=3.54.0, <3.57.0`。
+- 支持 RS 3.54.x 至 3.57.x，兼容范围为 `>=3.54.0, <3.58.0`。
 - 提供 Linux x86_64、Linux ARM64（glibc 2.28+）和 macOS ARM64（Apple 芯片）安装包。
 - 插件 ID：`personal.quota-manager`。为保留既有安装配置和私有状态，继续沿用该身份。
 - 许可证：Apache-2.0，第三方来源见 [LICENSES/NOTICE.md](LICENSES/NOTICE.md)。

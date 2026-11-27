@@ -37,7 +37,7 @@ dependencies = [
 [[package]]
 name = "gateway-plugin-sdk"
 version = "0.1.0"
-source = "git+https://github.com/zyycn/codex-proxy-rs.git?rev=a46d0f4c08bcf0f89aa004eb1d089e9e0039898c#a46d0f4c08bcf0f89aa004eb1d089e9e0039898c"
+source = "git+https://github.com/zyycn/codex-proxy-rs.git?rev=6950c02ee460143dd63103a35a5dd679712488dc#6950c02ee460143dd63103a35a5dd679712488dc"
 dependencies = [
  "base64",
  "semver",
@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "quota-manager"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "gateway-plugin-sdk",
  "serde",
